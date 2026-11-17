@@ -553,3 +553,5 @@ body.locked .topbar, body.locked .tabs-bottom { display: none; }
 .macro span { font-size: .72rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
 .macro.kcal { background: var(--warm-soft); }
 @media (max-width: 380px) { .macros { grid-template-columns: repeat(3, 1fr); } }
+.note-portions { grid-column: 1 / -1; background: var(--warm-soft); border: 1px solid color-mix(in srgb, var(--warm) 30%, transparent); }
+.note-portions p { color: var(--text); }

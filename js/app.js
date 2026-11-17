@@ -314,6 +314,7 @@ function renderRecipe(id) {
           <ol class="steps" id="steps">${stepsHTML()}</ol>
 
           <div class="notes">
+            ${r.portions ? `<div class="note-card note-portions"><h3>⚖️ Porsjonstips</h3><p>${esc(r.portions)}</p></div>` : ""}
             ${r.health ? `<div class="note-card note-health"><h3>💚 Hvorfor sunt</h3><p>${esc(r.health)}</p></div>` : ""}
             ${r.kids ? `<div class="note-card note-kids"><h3>🧒 Barnetips</h3><p>${esc(r.kids)}</p></div>` : ""}
             ${r.tips?.length ? `<div class="note-card note-tips"><h3>💡 Tips</h3><ul>${r.tips.map((t) => `<li>${esc(t)}</li>`).join("")}</ul></div>` : ""}
