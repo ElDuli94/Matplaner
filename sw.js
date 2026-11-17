@@ -1,11 +1,11 @@
 // Service worker: gjør siden rask og lar den fungere uten nett (f.eks. i butikken).
-const VERSION = "v6";
+const VERSION = "v7";
 const CACHE = `matplan-${VERSION}`;
 const CORE = [
   "./",
   "index.html",
-  "css/style.css?v=5",
-  "js/app.js?v=5",
+  "css/style.css?v=6",
+  "js/app.js?v=6",
   "js/util.js",
   "js/shopping.js",
   "js/store.js",

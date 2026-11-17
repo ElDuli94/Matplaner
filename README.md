@@ -32,6 +32,8 @@ sw.js                   Gjør at siden virker offline
 
 Siden viser automatisk uken som gjelder i dag, og eldre uker kan velges fra menyen.
 
+Hver oppskrift har `nutrition` (kcal, protein, carbs, fat, fiber) per porsjon. En dag uten middag (familien er borte) skrives som `{ "date": "2026-11-18", "note": "Borte" }` uten `recipe`. På siden kan familien også trykke «🧳 Borte» på en dag, og da fjernes den fra handlelisten.
+
 Hver ingrediens har en `cat` (avdeling): `grønt`, `brød`, `kjøtt`, `fisk`, `meieri`, `ost`, `middag`, `tørrvarer`, `hermetikk`, `sauser`, `bakevarer`, `frys`, `annet` eller `basis` (krydder og olje som de fleste har hjemme). Like navn blir slått sammen i handlelisten.
 
 ## Publisering (GitHub Pages)

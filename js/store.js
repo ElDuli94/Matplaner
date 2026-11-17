@@ -68,6 +68,9 @@ export class ListStore {
   /** Overstyrer om en dag skal være med i handlelisten (delt med familien). */
   setDay(date, on) { this.patch({ [`days/${date}`]: on }); }
 
+  /** Familien er borte denne dagen: ingen middag og ingen varer. */
+  setAway(date, away) { this.patch({ [`away/${date}`]: away ? true : null }); }
+
   setChecked(key, on) { this.patch({ [`checked/${key}`]: on ? true : null }); }
 
   addCustom(name) {
@@ -88,5 +91,5 @@ export class ListStore {
 }
 
 function normalize(s) {
-  return { checked: { ...(s.checked || {}) }, custom: { ...(s.custom || {}) }, days: { ...(s.days || {}) } };
+  return { checked: { ...(s.checked || {}) }, custom: { ...(s.custom || {}) }, days: { ...(s.days || {}) }, away: { ...(s.away || {}) } };
 }

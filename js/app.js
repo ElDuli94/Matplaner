@@ -62,7 +62,9 @@ async function selectWeek(id) {
   state.store = new ListStore(week.id);
   state.store.onChange(() => {
     updateBadge();
-    if (currentRoute().name === "list") renderListBody();
+    const r = currentRoute().name;
+    if (r === "list") renderListBody();
+    else if (r === "week" && getUser()) renderWeek(true);
   });
   updateBadge();
 }
@@ -107,11 +109,30 @@ function weekSelectHTML() {
   return `<label class="visually-hidden" for="weekSelect">Velg uke</label><select id="weekSelect" class="week-select">${opts}</select>`;
 }
 
-function renderWeek() {
+/** Er familien borte denne dagen? (planlagt i ukefilen eller markert på siden) */
+function isAway(day) {
+  if (!day.recipe) return true;
+  return !!state.store?.state.away?.[day.date];
+}
+
+function macroLine(n) {
+  if (!n) return "";
+  return `
+    <div class="macros" aria-label="Næringsinnhold per porsjon">
+      <div class="macro kcal"><b>${n.kcal}</b><span>kcal</span></div>
+      <div class="macro"><b>${n.protein} g</b><span>Protein</span></div>
+      <div class="macro"><b>${n.carbs} g</b><span>Karbo</span></div>
+      <div class="macro"><b>${n.fat} g</b><span>Fett</span></div>
+      ${n.fiber != null ? `<div class="macro"><b>${n.fiber} g</b><span>Fiber</span></div>` : ""}
+    </div>`;
+}
+
+function renderWeek(quiet = false) {
   const w = state.week;
   const today = todayISO();
-  const todayDay = w.days.find((d) => d.date === today);
+  const todayDay = w.days.find((d) => d.date === today && !isAway(d));
   document.title = `Matplan – ${w.title}`;
+  const scrollY = window.scrollY;
 
   const hero = todayDay ? (() => {
     const r = w.recipes[todayDay.recipe];
@@ -121,32 +142,52 @@ function renderWeek() {
         <div>
           <div class="today-label">I dag · ${esc(dayName(today))}</div>
           <h2>${esc(r.title)}</h2>
-          <div class="today-meta"><span>⏱ ${formatTime(r.time)}</span><span>👨‍🍳 ${esc(r.difficulty)}</span></div>
+          <div class="today-meta"><span>⏱ ${formatTime(r.time)}</span>${r.nutrition ? `<span>🔥 ${r.nutrition.kcal} kcal</span>` : ""}<span>👨‍🍳 ${esc(r.difficulty)}</span></div>
           <span class="today-cta">Se oppskrift →</span>
         </div>
       </a>` })() : "";
 
   const cards = w.days.map((d) => {
     const r = w.recipes[d.recipe];
-    if (!r) return "";
     const isToday = d.date === today;
     const isPast = d.date < today;
-    return `
-      <a class="day ${isToday ? "is-today" : ""} ${isPast ? "is-past" : ""}" href="#/oppskrift/${esc(d.recipe)}" style="--h:${r.hue ?? 30}">
-        <div class="day-emoji" aria-hidden="true">${r.emoji}</div>
-        <div>
-          <div class="day-when">${esc(dayName(d.date))} · ${esc(shortDate(d.date))} ${isToday ? '<span class="pill-today">I dag</span>' : ""}</div>
-          <h3>${esc(r.title)}</h3>
-          <div class="chips">
-            <span class="chip chip-accent">⏱ ${formatTime(r.time)}</span>
-            ${(r.tags || []).slice(0, 2).map((t) => `<span class="chip">${esc(t)}</span>`).join("")}
+    const away = isAway(d);
+    const when = `<div class="day-when">${esc(dayName(d.date))} · ${esc(shortDate(d.date))} ${isToday ? '<span class="pill-today">I dag</span>' : ""}</div>`;
+    const toggle = r ? `<button class="away-btn ${away ? "on" : ""}" type="button" data-away="${esc(d.date)}" aria-pressed="${away}" aria-label="${away ? "Vi er hjemme likevel" : "Vi er borte denne dagen"}">${away ? "↩︎ Hjemme" : "🧳 Borte"}</button>` : "";
+    if (away) {
+      return `
+        <div class="day is-away ${isToday ? "is-today" : ""}" style="--h:210">
+          <div class="day-main">
+            <div class="day-emoji" aria-hidden="true">🧳</div>
+            <div>
+              ${when}
+              <h3>Borte – ingen middag</h3>
+              <p class="away-note">${r ? `Planlagt: ${esc(r.title)}. Ikke med på handlelisten.` : esc(d.note || "Ingen middag planlagt denne dagen.")}</p>
+            </div>
           </div>
-        </div>
-      </a>`;
+          ${toggle}
+        </div>`;
+    }
+    return `
+      <div class="day ${isToday ? "is-today" : ""} ${isPast ? "is-past" : ""}" style="--h:${r.hue ?? 30}">
+        <a class="day-main" href="#/oppskrift/${esc(d.recipe)}">
+          <div class="day-emoji" aria-hidden="true">${r.emoji}</div>
+          <div>
+            ${when}
+            <h3>${esc(r.title)}</h3>
+            <div class="chips">
+              <span class="chip chip-accent">⏱ ${formatTime(r.time)}</span>
+              ${r.nutrition ? `<span class="chip">🔥 ${r.nutrition.kcal} kcal</span>` : ""}
+              ${(r.tags || []).slice(0, 1).map((t) => `<span class="chip">${esc(t)}</span>`).join("")}
+            </div>
+          </div>
+        </a>
+        ${toggle}
+      </div>`;
   }).join("");
 
   app.innerHTML = `
-    <section class="page">
+    <section class="page ${quiet ? "no-anim" : ""}">
       <div class="page-head">
         <div>
           <div class="eyebrow">${esc(rangeLabel(w.start, w.end))}</div>
@@ -165,8 +206,15 @@ function renderWeek() {
         <a class="btn btn-primary" href="#/handleliste">🛒 Åpne handlelisten</a>
       </div>
     </section>`;
+  window.scrollTo(0, scrollY);
 
   app.querySelector("#weekSelect")?.addEventListener("change", (e) => { location.hash = `#/uke/${e.target.value}`; });
+  app.querySelector(".days").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-away]"); if (!b) return;
+    const away = b.getAttribute("aria-pressed") !== "true";
+    state.store.setAway(b.dataset.away, away);
+    toast(away ? "Merket som borte – fjernet fra handlelisten" : "Middagen er tilbake på planen");
+  });
 }
 
 /* ---------------- Oppskrift ---------------- */
@@ -179,7 +227,9 @@ function renderRecipe(id) {
 
   const idx = w.days.findIndex((d) => d.recipe === id);
   const day = w.days[idx];
-  const prev = w.days[idx - 1], next = w.days[idx + 1];
+  const withRecipe = (d) => d && d.recipe && w.recipes[d.recipe];
+  const prev = w.days.slice(0, Math.max(idx, 0)).reverse().find(withRecipe);
+  const next = w.days.slice(idx + 1).find(withRecipe);
   const cook = storage.get(cookKey(id), { ing: [], steps: [] });
   let servings = state.servings;
   document.title = `${r.title} – Matplan`;
@@ -236,6 +286,10 @@ function renderRecipe(id) {
           ${(r.tags || []).map((t) => `<span class="hero-stat">${esc(t)}</span>`).join("")}
         </div>
       </header>
+      ${r.nutrition ? `<section class="panel macro-panel" aria-labelledby="macroTitle">
+        <div class="panel-head"><h2 id="macroTitle">Næring per porsjon</h2><span class="muted">ca.-verdier</span></div>
+        ${macroLine(r.nutrition)}
+      </section>` : ""}
 
       <div class="recipe-layout">
         <section class="panel panel-ingredients" aria-labelledby="ingTitle">
@@ -316,6 +370,8 @@ function releaseWakeLock() { state.wakeLock?.release().catch(() => {}); state.wa
 /* ---------------- Handleliste ---------------- */
 /** Dager som har vært er ikke med som standard; familien kan overstyre per dag. */
 function isDayIncluded(date) {
+  const day = state.week?.days.find((d) => d.date === date);
+  if (!day || isAway(day)) return false;
   const override = state.store?.state.days?.[date];
   if (typeof override === "boolean") return override;
   return date >= todayISO();
@@ -390,8 +446,10 @@ function renderList() {
   });
 
   app.querySelector("#dayPicker").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-day]"); if (!b) return;
-    state.store.setDay(b.dataset.day, !isDayIncluded(b.dataset.day));
+    const b = e.target.closest("[data-day]"); if (!b || b.disabled) return;
+    const date = b.dataset.day;
+    if (state.store.state.away?.[date]) { state.store.patch({ [`away/${date}`]: null, [`days/${date}`]: true }); return; }
+    state.store.setDay(date, !isDayIncluded(date));
   });
 
   const body = app.querySelector("#listBody");
@@ -427,11 +485,12 @@ function renderListBody() {
     <div class="day-picker-head"><strong>Handler til</strong><span class="muted">${included.length} av ${state.week.days.length} middager</span></div>
     <div class="day-chips">${state.week.days.map((d) => {
       const on = isDayIncluded(d.date);
+      const away = isAway(d);
       const r = state.week.recipes[d.recipe];
-      return `<button type="button" class="day-chip ${on ? "on" : ""} ${d.date < today ? "past" : ""}" data-day="${esc(d.date)}" aria-pressed="${on}" title="${esc(r?.title || "")}">
-        <span class="dc-name">${esc(dayName(d.date).slice(0, 3))}</span><span class="dc-emoji" aria-hidden="true">${r?.emoji || ""}</span></button>`;
+      return `<button type="button" class="day-chip ${on ? "on" : ""} ${d.date < today ? "past" : ""} ${away ? "away" : ""}" data-day="${esc(d.date)}" aria-pressed="${on}" title="${esc(away ? "Borte" : r?.title || "")}" ${!d.recipe ? "disabled" : ""}>
+        <span class="dc-name">${esc(dayName(d.date).slice(0, 3))}</span><span class="dc-emoji" aria-hidden="true">${away ? "🧳" : r?.emoji || ""}</span></button>`;
     }).join("")}</div>
-    ${state.week.days.some((d) => d.date < today) ? `<p class="muted day-hint">Dager som har vært er tatt bort. Trykk på en dag for å ta den med eller fjerne den.</p>` : ""}`;
+    ${state.week.days.some((d) => d.date < today || isAway(d)) ? `<p class="muted day-hint">Dager som har vært og dager dere er borte (🧳) er tatt bort. Trykk på en dag for å ta den med eller fjerne den.</p>` : ""}`;
 
   // Fremdrift
   const { total, done } = listCounts();

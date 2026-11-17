@@ -199,10 +199,9 @@ main { outline: none; }
 
 .day {
   --h: 30;
-  display: grid; grid-template-columns: 64px 1fr; gap: 14px; align-items: center;
   background: var(--surface); border: 1px solid var(--line);
-  border-radius: var(--radius); padding: 14px;
-  text-decoration: none; box-shadow: var(--shadow);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow);
   transition: transform .15s ease, box-shadow .15s ease;
   position: relative;
 }
@@ -522,3 +521,35 @@ body.locked .topbar, body.locked .tabs-bottom { display: none; }
 .day-chip.past:not(.on) .dc-name { text-decoration: line-through; }
 .day-chip:active { transform: scale(.94); }
 .day-hint { margin-top: 10px; font-size: .82rem; }
+
+/* ============ Dagkort: lenke + borte-knapp ============ */
+.day-main {
+  display: grid; grid-template-columns: 64px 1fr; gap: 14px; align-items: center;
+  padding: 14px; text-decoration: none; color: inherit; border-radius: inherit; height: 100%;
+}
+.page.no-anim { animation: none; }
+.day .chips, .day .away-note { padding-right: 84px; }
+.away-btn {
+  position: absolute; bottom: 12px; right: 12px;
+  border: 1px solid var(--line); background: var(--surface); color: var(--muted);
+  border-radius: 999px; padding: 4px 10px; font-size: .74rem; font-weight: 700; min-height: 30px;
+}
+.away-btn:hover { color: var(--text); border-color: var(--muted); }
+.away-btn.on { background: var(--accent-soft); color: var(--accent-strong); border-color: var(--accent); }
+.day.is-away { background: var(--surface-2); box-shadow: none; border-style: dashed; }
+.day.is-away:hover { transform: none; box-shadow: none; }
+.day.is-away h3 { color: var(--muted); }
+.away-note { color: var(--muted); font-size: .85rem; }
+.day-chip.away { border-style: dashed; }
+.day-chip.away .dc-emoji { filter: none; opacity: .8; }
+.day-chip:disabled { cursor: default; }
+
+/* ============ Makroer ============ */
+.macro-panel { margin-bottom: 20px; }
+.macro-panel .panel-head { margin-bottom: 10px; }
+.macros { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
+.macro { background: var(--surface-2); border-radius: var(--radius-sm); padding: 10px 6px; text-align: center; display: grid; gap: 2px; }
+.macro b { font-family: var(--font-display); font-size: 1.1rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+.macro span { font-size: .72rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+.macro.kcal { background: var(--warm-soft); }
+@media (max-width: 380px) { .macros { grid-template-columns: repeat(3, 1fr); } }
