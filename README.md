@@ -17,6 +17,7 @@ js/app.js               Visninger: ukeplan, oppskrift, handleliste, innstillinge
 js/shopping.js          Slår sammen ingredienser til handleliste (Rema-rekkefølge)
 js/store.js             Synk av handlelisten (Firebase + lokal kopi)
 js/auth.js              Innlogging (Firebase Authentication)
+js/access.js            Administrator, medlemmer og invitasjoner
 js/firebase.js          Laster Firebase ved behov
 js/firebase-config.js   Firebase-oppsett
 data/weeks.json         Oversikt over alle uker
@@ -39,17 +40,23 @@ Hver ingrediens har en `cat` (avdeling): `grønt`, `brød`, `kjøtt`, `fisk`, `m
 2. Gå til **Settings → Pages** på GitHub og velg **Source: GitHub Actions**.
 3. Siden publiseres automatisk til `https://<brukernavn>.github.io/Matplaner/` hver gang `main` oppdateres.
 
-## Innlogging og delt handleliste (Firebase)
+## Innlogging, administrator og invitasjoner (Firebase)
 
-Siden krever innlogging med e-post og passord. Alle innloggede deler samme handleliste i sanntid.
+- Alle kan opprette konto, men nye kontoer **venter på godkjenning** og ser ingenting før de er godkjent.
+- **Administrator** ser siden «Familien» (⚙️ → Administrer familien). Der kan administrator:
+  - invitere noen på e-post (lenken gjelder i 14 dager, og den inviterte kommer rett inn),
+  - godkjenne eller avslå selvregistrerte,
+  - fjerne medlemmer og slette invitasjoner.
+- Tilgangen håndheves av databasereglene i `database.rules.json`, ikke bare av nettsiden.
 
 Oppsett i [Firebase-konsollen](https://console.firebase.google.com/project/matplaner-60d75):
 
-1. **Authentication → Get started → Sign-in method → Email/Password** → Enable.
-2. **Authentication → Settings → User actions**: fjern haken for **Enable create (sign-up)**, slik at ingen kan registrere seg selv.
-3. **Authentication → Settings → Authorized domains**: legg til `elduli94.github.io`.
-4. **Authentication → Users → Add user**: én bruker per familiemedlem.
-5. **Realtime Database → Rules**: lim inn `database.rules.json` og trykk Publish.
+1. **Authentication → Sign-in method → Email/Password** → Enable.
+2. **Authentication → Settings → Authorized domains**: legg til `elduli94.github.io`.
+3. **Realtime Database → Rules**: lim inn `database.rules.json`, men bytt `ADMIN-EPOST@eksempel.no` med administratorens e-post (små bokstaver). Trykk Publish.
+4. Opprett en konto på nettsiden med administrator-e-posten og trykk «Er du administrator?» på venteskjermen. Etter at første administrator er satt, kan ingen andre bli administrator på egen hånd.
+
+Database-struktur: `admins/{uid}`, `members/{uid}`, `invites/{token}`, `requests/{uid}`, `family/lists/{uke}`.
 
 Merk: Selve ukeplanen og oppskriftene ligger i dette (offentlige) repoet. Innloggingen beskytter handlelisten og familiens data i databasen.
 

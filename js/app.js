@@ -1,7 +1,8 @@
 import { esc, dayName, shortDate, rangeLabel, todayISO, formatTime, formatAmount, storage, slug } from "./util.js";
 import { buildShoppingList } from "./shopping.js";
 import { ListStore } from "./store.js";
-import { initAuth, getUser, signIn, signOut, resetPassword, errorText } from "./auth.js";
+import { initAuth, getUser, signIn, signUp, signOut, resetPassword, errorText } from "./auth.js";
+import { getAccess, getInvite, createInvite, inviteLink, claimInvite, requestAccess, becomeAdmin, loadAdminData, approveRequest, denyRequest, deleteInvite, removeMember } from "./access.js";
 
 const app = document.getElementById("app");
 const settingsDialog = document.getElementById("settings");
@@ -16,6 +17,8 @@ const state = {
   hideChecked: storage.get("matplan:hideChecked", false),
   closedGroups: new Set(storage.get("matplan:closedGroups", ["basis"])),
   wakeLock: null,
+  access: { admin: false, member: false },
+  pendingInvite: null,
 };
 
 /* ---------------- Tema ---------------- */
@@ -70,6 +73,7 @@ function currentRoute() {
   if (parts[0] === "handleliste") return { name: "list" };
   if (parts[0] === "oppskrift" && parts[1]) return { name: "recipe", id: parts[1] };
   if (parts[0] === "uke" && parts[1]) return { name: "week", weekId: parts[1] };
+  if (parts[0] === "admin") return { name: "admin" };
   return { name: "week" };
 }
 
@@ -85,6 +89,7 @@ async function render() {
   });
 
   if (route.name === "list") renderList();
+  else if (route.name === "admin" && state.access.admin) renderAdmin();
   else if (route.name === "recipe") renderRecipe(route.id);
   else renderWeek();
 }
@@ -486,7 +491,10 @@ function renderSettings() {
       <div class="setting">
         <h3>👤 Konto</h3>
         <p>Logget inn som <strong>${esc(user?.email || "")}</strong>. Handlelisten deles med alle i familien som er logget inn.</p>
-        <div class="row"><button class="btn btn-sm" type="button" id="logoutBtn">Logg ut</button></div>
+        <div class="row">
+          ${state.access.admin ? `<a class="btn btn-sm btn-primary" href="#/admin" id="adminLink">👑 Administrer familien</a>` : ""}
+          <button class="btn btn-sm" type="button" id="logoutBtn">Logg ut</button>
+        </div>
       </div>
     </div>`;
 
@@ -504,6 +512,7 @@ function renderSettings() {
     applyTheme(b.dataset.themeBtn);
     renderSettings();
   }));
+  q("#adminLink")?.addEventListener("click", () => settingsDialog.close());
   q("#logoutBtn").addEventListener("click", async () => {
     if (!confirm("Vil du logge ut?")) return;
     await signOut();
@@ -514,58 +523,50 @@ function renderSettings() {
 settingsDialog.addEventListener("click", (e) => { if (e.target === settingsDialog) settingsDialog.close(); });
 document.getElementById("settingsBtn").addEventListener("click", openSettings);
 
-/* ---------------- Innlogging ---------------- */
-function renderLogin(message = "") {
+/* ---------------- Innlogging, registrering og tilgang ---------------- */
+function authShell(inner, foot = "🔒 Kun for familien. Nye kontoer må godkjennes av administrator.") {
   document.body.classList.add("locked");
-  document.title = "Logg inn – Matplan";
   if (settingsDialog.open) settingsDialog.close();
   app.innerHTML = `
     <section class="login">
       <div class="login-card">
         <div class="login-logo" aria-hidden="true"><img src="icons/icon.svg" alt="" width="72" height="72"></div>
-        <h1>Matplan</h1>
-        <p class="login-sub">Familiens ukesmeny og handleliste</p>
-        <form id="loginForm" novalidate>
-          <label class="field">
-            <span>E-post</span>
-            <input id="email" type="email" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false" required value="${esc(storage.get("matplan:lastEmail", ""))}">
-          </label>
-          <label class="field">
-            <span>Passord</span>
-            <input id="password" type="password" autocomplete="current-password" required>
-          </label>
-          <p class="login-msg" id="loginMsg" role="alert">${esc(message)}</p>
-          <button class="btn btn-primary btn-block" type="submit" id="loginBtn">Logg inn</button>
-        </form>
-        <button class="btn btn-ghost btn-sm" type="button" id="forgotBtn">Glemt passord?</button>
+        ${inner}
       </div>
-      <p class="login-foot">🔒 Kun for familien. Kontoer opprettes av administrator.</p>
+      <p class="login-foot">${foot}</p>
     </section>`;
+}
 
-  const form = app.querySelector("#loginForm");
+const passwordFields = (confirm) => `
+  <label class="field"><span>Passord</span>
+    <input id="password" type="password" autocomplete="${confirm ? "new-password" : "current-password"}" required minlength="6"></label>
+  ${confirm ? `<label class="field"><span>Gjenta passord</span>
+    <input id="password2" type="password" autocomplete="new-password" required minlength="6"></label>` : ""}`;
+
+function renderLogin(mode = "login", message = "") {
+  const register = mode === "register";
+  document.title = register ? "Opprett konto – Matplan" : "Logg inn – Matplan";
+  authShell(`
+    <h1>Matplan</h1>
+    <p class="login-sub">${register ? "Opprett en konto. Administrator må godkjenne den før du får tilgang." : "Familiens ukesmeny og handleliste"}</p>
+    <form id="authForm" novalidate>
+      <label class="field"><span>E-post</span>
+        <input id="email" type="email" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false" required value="${esc(storage.get("matplan:lastEmail", ""))}"></label>
+      ${passwordFields(register)}
+      <p class="login-msg" id="loginMsg" role="alert">${esc(message)}</p>
+      <button class="btn btn-primary btn-block" type="submit" id="submitBtn">${register ? "Opprett konto" : "Logg inn"}</button>
+    </form>
+    ${register ? "" : `<button class="btn btn-ghost btn-sm" type="button" id="forgotBtn">Glemt passord?</button>`}
+    <p class="login-switch">${register ? `Har du allerede konto? <button type="button" class="link-btn" id="switchBtn">Logg inn</button>` : `Ny her? <button type="button" class="link-btn" id="switchBtn">Opprett konto</button>`}</p>`);
+
   const email = app.querySelector("#email");
-  const password = app.querySelector("#password");
   const msg = app.querySelector("#loginMsg");
-  const btn = app.querySelector("#loginBtn");
-  (email.value ? password : email).focus();
+  (email.value ? app.querySelector("#password") : email).focus();
+  app.querySelector("#switchBtn").addEventListener("click", () => renderLogin(register ? "login" : "register"));
 
-  form.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    msg.textContent = ""; msg.classList.remove("ok");
-    if (!email.value.trim() || !password.value) { msg.textContent = "Fyll inn e-post og passord."; return; }
-    btn.disabled = true; btn.textContent = "Logger inn …";
-    try {
-      await signIn(email.value, password.value);
-      storage.set("matplan:lastEmail", email.value.trim());
-      // onAuthStateChanged starter appen
-    } catch (err) {
-      msg.textContent = errorText(err);
-      btn.disabled = false; btn.textContent = "Logg inn";
-      password.select();
-    }
-  });
+  bindAuthForm(async (em, pw) => (register ? signUp(em, pw) : signIn(em, pw)), register, register ? "Oppretter konto …" : "Logger inn …");
 
-  app.querySelector("#forgotBtn").addEventListener("click", async () => {
+  app.querySelector("#forgotBtn")?.addEventListener("click", async () => {
     msg.classList.remove("ok");
     if (!email.value.trim()) { msg.textContent = "Skriv inn e-postadressen din først."; email.focus(); return; }
     try {
@@ -573,6 +574,94 @@ function renderLogin(message = "") {
       msg.textContent = "Hvis adressen har en konto, er det sendt en e-post med lenke for nytt passord.";
       msg.classList.add("ok");
     } catch (err) { msg.textContent = errorText(err); }
+  });
+}
+
+/** Felles innsending for innlogging/registrering. */
+function bindAuthForm(action, confirm, busyText) {
+  const form = app.querySelector("#authForm");
+  const email = app.querySelector("#email");
+  const password = app.querySelector("#password");
+  const password2 = app.querySelector("#password2");
+  const msg = app.querySelector("#loginMsg");
+  const btn = app.querySelector("#submitBtn");
+  const label = btn.textContent;
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    msg.textContent = ""; msg.classList.remove("ok");
+    if (!email.value.trim() || !password.value) { msg.textContent = "Fyll inn e-post og passord."; return; }
+    if (confirm && password.value.length < 6) { msg.textContent = "Passordet må ha minst 6 tegn."; return; }
+    if (confirm && password.value !== password2.value) { msg.textContent = "Passordene er ikke like."; password2.focus(); return; }
+    btn.disabled = true; btn.textContent = busyText;
+    try {
+      await action(email.value, password.value);
+      storage.set("matplan:lastEmail", email.value.trim());
+      // onAuthStateChanged tar over herfra
+    } catch (err) {
+      msg.textContent = errorText(err);
+      btn.disabled = false; btn.textContent = label;
+    }
+  });
+}
+
+/** Side for den som har fått en invitasjonslenke. */
+async function renderInvite(token, mode = "register") {
+  authShell(`<div class="spinner" aria-hidden="true"></div><p class="login-sub">Henter invitasjonen …</p>`);
+  let invite = null;
+  try { invite = await getInvite(token); } catch { /* ingen tilgang / nett */ }
+
+  if (!invite || invite.usedBy || invite.expires < Date.now()) {
+    state.pendingInvite = null;
+    storage.set("matplan:invite", null);
+    authShell(`
+      <h1>Invitasjonen gjelder ikke</h1>
+      <p class="login-sub">${!invite ? "Lenken er ugyldig eller slettet." : invite.usedBy ? "Invitasjonen er allerede brukt." : "Invitasjonen har gått ut på dato."} Be om en ny invitasjon, eller logg inn hvis du allerede har konto.</p>
+      <button class="btn btn-primary btn-block" type="button" id="toLogin">Til innlogging</button>`);
+    app.querySelector("#toLogin").addEventListener("click", () => renderLogin());
+    return;
+  }
+
+  const register = mode === "register";
+  document.title = "Invitasjon – Matplan";
+  authShell(`
+    <h1>Du er invitert! 🎉</h1>
+    <p class="login-sub">${register ? "Lag et passord for å bli med i familiens Matplan." : "Logg inn for å godta invitasjonen."}</p>
+    <form id="authForm" novalidate>
+      <label class="field"><span>E-post</span>
+        <input id="email" type="email" autocomplete="username" value="${esc(invite.email)}" readonly></label>
+      ${passwordFields(register)}
+      <p class="login-msg" id="loginMsg" role="alert"></p>
+      <button class="btn btn-primary btn-block" type="submit" id="submitBtn">${register ? "Opprett konto" : "Logg inn"}</button>
+    </form>
+    <p class="login-switch">${register ? `Har du allerede konto? <button type="button" class="link-btn" id="switchBtn">Logg inn</button>` : `Ny bruker? <button type="button" class="link-btn" id="switchBtn">Opprett konto</button>`}</p>`,
+    "🔒 Invitasjonen gjelder bare for denne e-postadressen.");
+  app.querySelector("#password").focus();
+  app.querySelector("#switchBtn").addEventListener("click", () => renderInvite(token, register ? "login" : "register"));
+  bindAuthForm(async (em, pw) => {
+    try {
+      await (register ? signUp(em, pw) : signIn(em, pw));
+    } catch (err) {
+      if (err?.code === "auth/email-already-in-use") { renderInvite(token, "login"); }
+      throw err;
+    }
+  }, register, register ? "Oppretter konto …" : "Logger inn …");
+}
+
+function renderPending(user) {
+  document.title = "Venter på godkjenning – Matplan";
+  authShell(`
+    <h1>Venter på godkjenning</h1>
+    <p class="login-sub">Kontoen <strong>${esc(user.email)}</strong> er opprettet. Administrator må godkjenne den før du får se matplanen.</p>
+    <p class="login-msg" id="loginMsg" role="alert"></p>
+    <button class="btn btn-primary btn-block" type="button" id="recheckBtn">Sjekk igjen</button>
+    <button class="btn btn-ghost btn-sm" type="button" id="logoutBtn2">Logg ut</button>
+    <button class="link-btn small" type="button" id="adminBtn">Er du administrator?</button>`);
+  app.querySelector("#recheckBtn").addEventListener("click", () => onAuthChange(user));
+  app.querySelector("#logoutBtn2").addEventListener("click", () => signOut());
+  app.querySelector("#adminBtn").addEventListener("click", async () => {
+    const msg = app.querySelector("#loginMsg");
+    try { await becomeAdmin(user); onAuthChange(user); }
+    catch { msg.textContent = "Denne kontoen kan ikke bli administrator."; }
   });
 }
 
@@ -589,19 +678,148 @@ async function startApp() {
   await render();
 }
 
-function onAuthChange(user) {
-  if (user) startApp().catch(showLoadError);
-  else {
+let authSeq = 0;
+async function onAuthChange(user) {
+  const seq = ++authSeq;
+  if (!user) {
     state.store?.disconnect();
-    state.store = null; state.week = null;
+    state.store = null; state.week = null; state.access = { admin: false, member: false };
     updateBadge();
-    renderLogin();
+    if (state.pendingInvite) renderInvite(state.pendingInvite); else renderLogin();
+    return;
   }
+  authShell(`<div class="spinner" aria-hidden="true"></div><p class="login-sub">Logger inn …</p>`, "");
+  try {
+    if (state.pendingInvite) {
+      const token = state.pendingInvite;
+      state.pendingInvite = null;
+      storage.set("matplan:invite", null);
+      try { await claimInvite(token, user); toast("Velkommen til Matplan! 🎉"); }
+      catch (err) { console.warn("Kunne ikke bruke invitasjonen", err); toast("Invitasjonen gjelder ikke for denne kontoen"); }
+    }
+    const access = await getAccess(user);
+    if (seq !== authSeq) return;
+    state.access = access;
+    if (access.admin || access.member) await startApp();
+    else {
+      requestAccess(user).catch(() => {});
+      renderPending(user);
+    }
+  } catch (err) { showLoadError(err); }
 }
 
 function showLoadError(err) {
   console.error(err);
   app.innerHTML = `<section class="page"><div class="empty"><div class="big">📡</div><p>Kunne ikke hente matplanen. Sjekk nettet og prøv igjen.</p><p style="margin-top:12px"><button class="btn" onclick="location.reload()">Prøv igjen</button></p></div></section>`;
+}
+
+/* ---------------- Administrator ---------------- */
+const fmtDate = (ms) => new Date(ms).toLocaleDateString("nb-NO", { day: "numeric", month: "short" });
+
+function inviteMailto(invite) {
+  const link = inviteLink(invite.token || invite.id);
+  const subject = "Invitasjon til Matplan";
+  const body = `Hei!\n\nDu er invitert til familiens Matplan – ukesmeny med oppskrifter og felles handleliste.\n\nTrykk på lenken for å lage konto:\n${link}\n\nLenken gjelder i 14 dager.\n`;
+  return `mailto:${encodeURIComponent(invite.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+async function shareInvite(invite) {
+  const url = inviteLink(invite.token || invite.id);
+  if (navigator.share) {
+    try { await navigator.share({ title: "Invitasjon til Matplan", text: "Du er invitert til familiens Matplan:", url }); } catch { /* avbrutt */ }
+  } else {
+    try { await navigator.clipboard.writeText(url); toast("Lenke kopiert"); } catch { prompt("Kopier lenken:", url); }
+  }
+}
+
+async function renderAdmin() {
+  document.title = "Administrer – Matplan";
+  app.innerHTML = `
+    <section class="page">
+      <div class="page-head"><div>
+        <div class="eyebrow">Kun for administrator</div>
+        <h1 class="page-title">Familien</h1>
+        <p class="lead">Inviter nye, godkjenn forespørsler og styr hvem som har tilgang.</p>
+      </div></div>
+      <div class="admin-grid">
+        <section class="panel">
+          <h2>✉️ Inviter noen</h2>
+          <p class="muted">De får en lenke for å lage konto og kommer rett inn.</p>
+          <form class="add-form" id="inviteForm" autocomplete="off">
+            <label class="visually-hidden" for="inviteEmail">E-post</label>
+            <input id="inviteEmail" type="email" inputmode="email" autocapitalize="off" placeholder="navn@eksempel.no" required>
+            <button class="btn btn-primary" type="submit">Lag</button>
+          </form>
+          <div id="newInvite"></div>
+        </section>
+        <div id="adminLists"><div class="loading"><div class="spinner"></div></div></div>
+      </div>
+    </section>`;
+
+  app.querySelector("#inviteForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const input = app.querySelector("#inviteEmail");
+    const email = input.value.trim();
+    if (!/^\S+@\S+\.\S+$/.test(email)) { toast("Skriv inn en gyldig e-postadresse"); return; }
+    try {
+      const inv = await createInvite(email, getUser());
+      input.value = "";
+      app.querySelector("#newInvite").innerHTML = `
+        <div class="invite-ready">
+          <p><strong>Invitasjon klar for ${esc(inv.email)}</strong></p>
+          <div class="row">
+            <a class="btn btn-primary btn-sm" href="${esc(inviteMailto(inv))}">📧 Send på e-post</a>
+            <button class="btn btn-sm" type="button" id="shareNew">📤 Del lenke</button>
+          </div>
+        </div>`;
+      app.querySelector("#shareNew").addEventListener("click", () => shareInvite(inv));
+      loadAdminLists();
+    } catch (err) { toast(errorText(err)); }
+  });
+
+  app.querySelector("#adminLists").addEventListener("click", async (e) => {
+    const b = e.target.closest("button[data-act]"); if (!b) return;
+    const { act, id, email } = b.dataset;
+    try {
+      if (act === "approve") { await approveRequest(id, email); toast(`${email} er godkjent`); }
+      if (act === "deny" && confirm(`Avslå ${email}?`)) await denyRequest(id);
+      if (act === "delinv" && confirm(`Slette invitasjonen til ${email}?`)) await deleteInvite(id);
+      if (act === "share") await shareInvite({ id, email });
+      if (act === "remove" && confirm(`Fjerne tilgangen til ${email}?`)) { await removeMember(id); toast(`${email} er fjernet`); }
+      loadAdminLists();
+    } catch (err) { toast(errorText(err)); }
+  });
+
+  loadAdminLists();
+}
+
+async function loadAdminLists() {
+  const box = app.querySelector("#adminLists");
+  if (!box) return;
+  let data;
+  try { data = await loadAdminData(); } catch (err) { box.innerHTML = `<p class="muted">${esc(errorText(err))}</p>`; return; }
+  const me = getUser()?.uid;
+  const now = Date.now();
+  const item = (title, sub, actions) => `<li class="admin-item"><div><strong>${esc(title)}</strong><span class="muted">${esc(sub)}</span></div><div class="row">${actions}</div></li>`;
+  const btn = (act, d, label, cls = "btn-sm") => `<button class="btn ${cls}" type="button" data-act="${act}" data-id="${esc(d.id)}" data-email="${esc(d.email || "")}">${label}</button>`;
+
+  box.innerHTML = `
+    ${data.requests.length ? `<section class="panel">
+      <h2>🙋 Venter på godkjenning <span class="group-count">${data.requests.length}</span></h2>
+      <ul class="admin-list">${data.requests.map((r) => item(r.email, `Registrert ${fmtDate(r.at)}`, btn("approve", r, "Godkjenn", "btn-sm btn-primary") + btn("deny", r, "Avslå", "btn-sm btn-ghost"))).join("")}</ul>
+    </section>` : ""}
+    <section class="panel">
+      <h2>👨‍👩‍👧 Medlemmer <span class="group-count">${data.members.length + (state.access.admin && !data.members.some((m) => m.id === me) ? 1 : 0)}</span></h2>
+      <ul class="admin-list">
+        ${data.members.some((m) => m.id === me) ? "" : item(getUser()?.email || "", "Administrator (deg)", "")}
+        ${data.members.map((m) => item(m.email, m.id === me ? "Deg" : `Medlem siden ${fmtDate(m.joined)}`, m.id === me ? "" : btn("remove", m, "Fjern", "btn-sm btn-ghost"))).join("")}
+      </ul>
+    </section>
+    <section class="panel">
+      <h2>📨 Sendte invitasjoner <span class="group-count">${data.invites.length}</span></h2>
+      ${data.invites.length ? `<ul class="admin-list">${data.invites.map((i) => item(i.email, i.expires < now ? "Utløpt" : `Gjelder til ${fmtDate(i.expires)}`,
+        `<a class="btn btn-sm" href="${esc(inviteMailto(i))}">📧</a>` + btn("share", i, "📤") + btn("delinv", i, "Slett", "btn-sm btn-ghost"))).join("")}</ul>` : `<p class="muted">Ingen ubrukte invitasjoner.</p>`}
+    </section>`;
 }
 
 /* ---------------- Diverse ---------------- */
@@ -618,6 +836,13 @@ window.addEventListener("scroll", () => topbar.classList.toggle("scrolled", wind
 
 /* ---------------- Oppstart ---------------- */
 async function init() {
+  // Invitasjonslenke: ?invitasjon=TOKEN
+  const params = new URLSearchParams(location.search);
+  const token = params.get("invitasjon");
+  if (token && /^[a-z0-9]{10,64}$/.test(token)) storage.set("matplan:invite", token);
+  if (params.has("invitasjon")) history.replaceState(null, "", location.pathname + location.hash);
+  state.pendingInvite = storage.get("matplan:invite", null);
+
   if ("serviceWorker" in navigator && location.protocol === "https:") {
     navigator.serviceWorker.register("sw.js").catch(() => {});
   }

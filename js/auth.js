@@ -25,12 +25,23 @@ const ERRORS = {
   "auth/user-disabled": "Denne brukeren er deaktivert.",
   "auth/too-many-requests": "For mange forsøk. Vent litt og prøv igjen.",
   "auth/network-request-failed": "Ingen kontakt med nettet. Sjekk tilkoblingen.",
+  "auth/email-already-in-use": "Det finnes allerede en konto med denne e-posten. Logg inn i stedet.",
+  "auth/weak-password": "Passordet må ha minst 6 tegn.",
+  "auth/operation-not-allowed": "Registrering er ikke slått på i Firebase ennå.",
+  "auth/admin-restricted-operation": "Registrering er ikke slått på i Firebase ennå.",
+  "PERMISSION_DENIED": "Du har ikke tilgang til dette.",
 };
-export const errorText = (err) => ERRORS[err?.code] || "Noe gikk galt. Prøv igjen.";
+export const errorText = (err) =>
+  ERRORS[err?.code] || (String(err?.message || "").includes("PERMISSION_DENIED") ? ERRORS.PERMISSION_DENIED : "Noe gikk galt. Prøv igjen.");
 
 export async function signIn(email, password) {
   const fb = await loadAuth();
   await fb.signInWithEmailAndPassword(fb.auth, email.trim(), password);
+}
+
+export async function signUp(email, password) {
+  const fb = await loadAuth();
+  await fb.createUserWithEmailAndPassword(fb.auth, email.trim(), password);
 }
 
 export async function resetPassword(email) {

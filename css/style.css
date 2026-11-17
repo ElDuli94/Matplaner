@@ -483,3 +483,24 @@ body.locked .topbar, body.locked .tabs-bottom { display: none; }
 .btn-block { width: 100%; min-height: 52px; font-size: 1.05rem; }
 .btn:disabled { opacity: .7; cursor: default; }
 .login-foot { color: var(--muted); font-size: .85rem; text-align: center; }
+.login-switch { color: var(--muted); font-size: .92rem; margin-top: 6px; }
+.link-btn { background: none; border: 0; padding: 4px 2px; color: var(--accent-strong); font-weight: 700; text-decoration: underline; text-underline-offset: 3px; }
+.link-btn.small { font-size: .82rem; color: var(--muted); font-weight: 600; margin-top: 8px; }
+.login-card .spinner { margin: 18px auto 6px; }
+
+/* ============ Administrator ============ */
+.muted { color: var(--muted); font-size: .9rem; }
+.admin-grid { display: grid; gap: 16px; }
+.admin-grid #adminLists { display: grid; gap: 16px; }
+@media (min-width: 900px) { .admin-grid { grid-template-columns: 380px 1fr; align-items: start; } }
+.admin-grid .panel h2 { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.admin-grid .panel h2 .group-count { margin-left: 0; }
+.admin-grid .add-form { margin: 12px 0 0; }
+.admin-list { list-style: none; margin: 8px 0 0; padding: 0; }
+.admin-item { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 0; flex-wrap: wrap; }
+.admin-item + .admin-item { border-top: 1px dashed var(--line); }
+.admin-item > div:first-child { min-width: 0; display: grid; }
+.admin-item strong { overflow-wrap: anywhere; }
+.admin-item .row { display: flex; gap: 6px; }
+.invite-ready { margin-top: 14px; padding: 14px; border-radius: var(--radius-sm); background: var(--accent-soft); display: grid; gap: 10px; }
+.invite-ready .row { display: flex; gap: 8px; flex-wrap: wrap; }

@@ -1,16 +1,17 @@
 // Service worker: gjør siden rask og lar den fungere uten nett (f.eks. i butikken).
-const VERSION = "v3";
+const VERSION = "v4";
 const CACHE = `matplan-${VERSION}`;
 const CORE = [
   "./",
   "index.html",
-  "css/style.css?v=2",
-  "js/app.js?v=2",
+  "css/style.css?v=3",
+  "js/app.js?v=3",
   "js/util.js",
   "js/shopping.js",
   "js/store.js",
   "js/firebase.js",
   "js/auth.js",
+  "js/access.js",
   "js/firebase-config.js",
   "data/weeks.json",
   "manifest.webmanifest",
