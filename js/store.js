@@ -65,6 +65,9 @@ export class ListStore {
     }
   }
 
+  /** Overstyrer om en dag skal være med i handlelisten (delt med familien). */
+  setDay(date, on) { this.patch({ [`days/${date}`]: on }); }
+
   setChecked(key, on) { this.patch({ [`checked/${key}`]: on ? true : null }); }
 
   addCustom(name) {
@@ -85,5 +88,5 @@ export class ListStore {
 }
 
 function normalize(s) {
-  return { checked: { ...(s.checked || {}) }, custom: { ...(s.custom || {}) } };
+  return { checked: { ...(s.checked || {}) }, custom: { ...(s.custom || {}) }, days: { ...(s.days || {}) } };
 }

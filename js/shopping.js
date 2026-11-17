@@ -22,11 +22,12 @@ export const CATEGORIES = [
  * Slår sammen like varer (samme navn) på tvers av dagene.
  * Mengder med samme enhet summeres; ulike enheter vises side om side.
  */
-export function buildShoppingList(week, servings) {
+export function buildShoppingList(week, servings, includeDay = () => true) {
   const factor = servings / (week.baseServings || 4);
   const items = new Map();
 
   for (const day of week.days) {
+    if (!includeDay(day.date)) continue;
     const recipe = week.recipes[day.recipe];
     if (!recipe) continue;
     for (const ing of recipe.ingredients) {

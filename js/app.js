@@ -160,7 +160,7 @@ function renderWeek() {
       <div class="week-summary">
         <div>
           <strong>Klar for å handle?</strong>
-          <p>Alt du trenger til ${w.days.length} middager for ${state.servings} personer, sortert etter avdeling.</p>
+          <p>Alt du trenger til de resterende middagene for ${state.servings} personer, sortert etter avdeling.</p>
         </div>
         <a class="btn btn-primary" href="#/handleliste">🛒 Åpne handlelisten</a>
       </div>
@@ -314,9 +314,17 @@ function renderRecipe(id) {
 function releaseWakeLock() { state.wakeLock?.release().catch(() => {}); state.wakeLock = null; }
 
 /* ---------------- Handleliste ---------------- */
+/** Dager som har vært er ikke med som standard; familien kan overstyre per dag. */
+function isDayIncluded(date) {
+  const override = state.store?.state.days?.[date];
+  if (typeof override === "boolean") return override;
+  return date >= todayISO();
+}
+const shoppingGroups = () => buildShoppingList(state.week, state.servings, isDayIncluded);
+
 function listCounts() {
   if (!state.week || !state.store) return { total: 0, done: 0 };
-  const groups = buildShoppingList(state.week, state.servings).filter((g) => !g.pantry);
+  const groups = shoppingGroups().filter((g) => !g.pantry);
   const st = state.store.state;
   let total = 0, done = 0;
   for (const g of groups) for (const it of g.items) { total++; if (st.checked[it.key]) done++; }
@@ -343,6 +351,7 @@ function renderList() {
         </div>
         ${weekSelectHTML()}
       </div>
+      <div class="day-picker" id="dayPicker"></div>
       <div class="progress-wrap" id="progress"></div>
       <form class="add-form" id="addForm" autocomplete="off">
         <label class="visually-hidden" for="addInput">Legg til vare</label>
@@ -380,6 +389,11 @@ function renderList() {
     if (confirm("Fjerne alle avhukinger (og egne varer som er huket av)?\nDette gjelder for hele familien.")) state.store.reset();
   });
 
+  app.querySelector("#dayPicker").addEventListener("click", (e) => {
+    const b = e.target.closest("[data-day]"); if (!b) return;
+    state.store.setDay(b.dataset.day, !isDayIncluded(b.dataset.day));
+  });
+
   const body = app.querySelector("#listBody");
   body.addEventListener("change", (e) => {
     const t = e.target;
@@ -404,7 +418,20 @@ function renderListBody() {
   const body = app.querySelector("#listBody");
   if (!body) return;
   const st = state.store.state;
-  const groups = buildShoppingList(state.week, state.servings);
+  const groups = shoppingGroups();
+
+  // Dagvelger
+  const today = todayISO();
+  const included = state.week.days.filter((d) => isDayIncluded(d.date));
+  app.querySelector("#dayPicker").innerHTML = `
+    <div class="day-picker-head"><strong>Handler til</strong><span class="muted">${included.length} av ${state.week.days.length} middager</span></div>
+    <div class="day-chips">${state.week.days.map((d) => {
+      const on = isDayIncluded(d.date);
+      const r = state.week.recipes[d.recipe];
+      return `<button type="button" class="day-chip ${on ? "on" : ""} ${d.date < today ? "past" : ""}" data-day="${esc(d.date)}" aria-pressed="${on}" title="${esc(r?.title || "")}">
+        <span class="dc-name">${esc(dayName(d.date).slice(0, 3))}</span><span class="dc-emoji" aria-hidden="true">${r?.emoji || ""}</span></button>`;
+    }).join("")}</div>
+    ${state.week.days.some((d) => d.date < today) ? `<p class="muted day-hint">Dager som har vært er tatt bort. Trykk på en dag for å ta den med eller fjerne den.</p>` : ""}`;
 
   // Fremdrift
   const { total, done } = listCounts();
@@ -454,7 +481,9 @@ function renderListBody() {
       </details>`;
   }).join("");
 
-  body.innerHTML = `<div class="shop-grid">${customGroup}${groupHTML}</div>`;
+  body.innerHTML = groups.length || customs.length
+    ? `<div class="shop-grid">${customGroup}${groupHTML}</div>`
+    : `<div class="empty"><div class="big">🧺</div><p>Ingen dager er valgt. Trykk på en dag over for å ta den med.</p></div>`;
 }
 
 /* ---------------- Innstillinger ---------------- */

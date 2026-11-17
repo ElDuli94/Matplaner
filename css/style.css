@@ -506,3 +506,19 @@ body.locked .topbar, body.locked .tabs-bottom { display: none; }
 .invite-ready .row { display: flex; gap: 8px; flex-wrap: wrap; }
 .check-row.remember { min-height: 40px; padding: 2px 0; font-size: .95rem; }
 .check-row.remember input:checked ~ .label { color: var(--text); text-decoration: none; }
+
+/* ============ Dagvelger i handlelisten ============ */
+.day-picker { background: var(--surface); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; margin-bottom: 16px; box-shadow: var(--shadow); }
+.day-picker-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 10px; }
+.day-chips { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; }
+.day-chip {
+  display: grid; justify-items: center; gap: 2px; padding: 8px 0; min-height: 56px;
+  border-radius: 14px; border: 2px solid var(--line); background: var(--surface-2); color: var(--muted);
+  font-weight: 700; font-size: .78rem; transition: background .15s, border-color .15s, transform .1s;
+}
+.day-chip .dc-emoji { font-size: 1.2rem; filter: grayscale(1); opacity: .5; }
+.day-chip.on { border-color: var(--accent); background: var(--accent-soft); color: var(--accent-strong); }
+.day-chip.on .dc-emoji { filter: none; opacity: 1; }
+.day-chip.past:not(.on) .dc-name { text-decoration: line-through; }
+.day-chip:active { transform: scale(.94); }
+.day-hint { margin-top: 10px; font-size: .82rem; }
