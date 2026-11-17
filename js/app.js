@@ -1,6 +1,7 @@
 import { esc, dayName, shortDate, rangeLabel, todayISO, formatTime, formatAmount, storage, slug } from "./util.js";
 import { buildShoppingList } from "./shopping.js";
-import { ListStore, isCloudConfigured, getFamilyCode, setFamilyCode, newFamilyCode } from "./store.js";
+import { ListStore } from "./store.js";
+import { initAuth, getUser, signIn, signOut, resetPassword, errorText } from "./auth.js";
 
 const app = document.getElementById("app");
 const settingsDialog = document.getElementById("settings");
@@ -89,6 +90,7 @@ async function render() {
 }
 
 window.addEventListener("hashchange", () => {
+  if (!getUser() || !state.week) return;
   render().then(() => { window.scrollTo({ top: 0 }); app.focus({ preventScroll: true }); });
 });
 
@@ -370,7 +372,7 @@ function renderList() {
     renderListBody();
   });
   app.querySelector("#resetBtn").addEventListener("click", () => {
-    if (confirm("Fjerne alle avhukinger (og egne varer som er huket av)?" + (getFamilyCode() && isCloudConfigured() ? "\nDette gjelder for hele familien." : ""))) state.store.reset();
+    if (confirm("Fjerne alle avhukinger (og egne varer som er huket av)?\nDette gjelder for hele familien.")) state.store.reset();
   });
 
   const body = app.querySelector("#listBody");
@@ -409,10 +411,9 @@ function renderListBody() {
   // Synk-status
   const s = state.store.status;
   const sync = app.querySelector("#syncState");
-  const labels = { local: "Lagret på denne enheten", connecting: "Kobler til …", online: "Delt med familien", offline: "Frakoblet – synker senere" };
+  const labels = { connecting: "Kobler til …", online: "Delt med familien", offline: "Frakoblet – synker senere" };
   sync.className = `sync-state ${s}`;
   sync.innerHTML = `<span class="sync-dot"></span>${labels[s]}`;
-  if (s === "local") { sync.style.cursor = "pointer"; sync.onclick = openSettings; } else { sync.onclick = null; sync.style.cursor = ""; }
 
   const row = (it) => {
     const checked = !!st.checked[it.key];
@@ -458,32 +459,9 @@ function openSettings() {
   else settingsDialog.setAttribute("open", "");
 }
 
-function shareLink(code) {
-  return `${location.origin}${location.pathname}?familie=${code}`;
-}
-
 function renderSettings() {
   const theme = storage.get("matplan:theme", "auto");
-  const code = getFamilyCode();
-  const cloud = isCloudConfigured();
-
-  let sharing;
-  if (!cloud) {
-    sharing = `<p>Handlelisten lagres nå bare på denne enheten. Når Firebase er satt opp (se README), kan hele familien dele én liste i sanntid.</p>`;
-  } else if (code) {
-    sharing = `
-      <p>Denne enheten er koblet til familiens handleliste. Send lenken til de andre i familien – når de åpner den, er de koblet til samme liste.</p>
-      <div class="row"><span class="code-box">${esc(code)}</span></div>
-      <div class="row">
-        <button class="btn btn-primary btn-sm" type="button" id="shareBtn">📤 Del lenke</button>
-        <button class="btn btn-sm btn-ghost" type="button" id="leaveBtn">Koble fra</button>
-      </div>`;
-  } else {
-    sharing = `
-      <p>Lag en familiekode for å dele handlelisten. Har noen i familien allerede en kode, lim den inn under.</p>
-      <div class="row"><button class="btn btn-primary btn-sm" type="button" id="createCode">✨ Lag familiekode</button></div>
-      <form class="row" id="joinForm"><input class="text-input" id="joinInput" placeholder="Lim inn familiekode" autocomplete="off" autocapitalize="off"><button class="btn btn-sm" type="submit">Koble til</button></form>`;
-  }
+  const user = getUser();
 
   settingsDialog.innerHTML = `
     <div class="sheet-body">
@@ -496,10 +474,6 @@ function renderSettings() {
         </div></div>
       </div>
       <div class="setting">
-        <h3>👨‍👩‍👧 Delt handleliste</h3>
-        ${sharing}
-      </div>
-      <div class="setting">
         <h3>Utseende</h3>
         <div class="segmented" role="group" aria-label="Tema">
           ${[["auto", "Auto"], ["light", "Lyst"], ["dark", "Mørkt"]].map(([v, l]) => `<button type="button" data-theme-btn="${v}" class="${theme === v ? "active" : ""}">${l}</button>`).join("")}
@@ -509,10 +483,15 @@ function renderSettings() {
         <h3>📱 Legg til på hjemskjermen</h3>
         <p>På iPhone: trykk på Del-knappen i Safari og velg «Legg til på Hjem-skjerm». Da åpnes Matplan som en egen app.</p>
       </div>
+      <div class="setting">
+        <h3>👤 Konto</h3>
+        <p>Logget inn som <strong>${esc(user?.email || "")}</strong>. Handlelisten deles med alle i familien som er logget inn.</p>
+        <div class="row"><button class="btn btn-sm" type="button" id="logoutBtn">Logg ut</button></div>
+      </div>
     </div>`;
 
   const q = (s) => settingsDialog.querySelector(s);
-  q("[data-close]").addEventListener("click", () => settingsDialog.close?.() ?? settingsDialog.removeAttribute("open"));
+  q("[data-close]").addEventListener("click", () => settingsDialog.close());
   settingsDialog.querySelectorAll("[data-s]").forEach((b) => b.addEventListener("click", () => {
     state.servings = Math.min(12, Math.max(1, state.servings + Number(b.dataset.s)));
     storage.set("matplan:servings", state.servings);
@@ -525,35 +504,104 @@ function renderSettings() {
     applyTheme(b.dataset.themeBtn);
     renderSettings();
   }));
-  q("#createCode")?.addEventListener("click", () => { newFamilyCode(); reconnect(); renderSettings(); toast("Familiekode laget – del lenken med familien"); });
-  q("#joinForm")?.addEventListener("submit", (e) => {
-    e.preventDefault();
-    const raw = q("#joinInput").value.trim();
-    const fromLink = raw.match(/familie=([a-z0-9]+)/i);
-    if (!setFamilyCode(fromLink ? fromLink[1] : raw)) { toast("Ugyldig kode – den skal være minst 10 tegn"); return; }
-    reconnect(); renderSettings(); toast("Koblet til familiens handleliste");
-  });
-  q("#leaveBtn")?.addEventListener("click", () => {
-    if (!confirm("Koble denne enheten fra den delte handlelisten?")) return;
-    setFamilyCode(null); reconnect(); renderSettings();
-  });
-  q("#shareBtn")?.addEventListener("click", async () => {
-    const url = shareLink(code);
-    if (navigator.share) {
-      try { await navigator.share({ title: "Familiens handleliste", text: "Bli med på handlelisten vår i Matplan:", url }); } catch { /* avbrutt */ }
-    } else {
-      try { await navigator.clipboard.writeText(url); toast("Lenke kopiert"); } catch { prompt("Kopier lenken:", url); }
-    }
+  q("#logoutBtn").addEventListener("click", async () => {
+    if (!confirm("Vil du logge ut?")) return;
+    await signOut();
+    // onAuthStateChanged tar oss til innloggingssiden
   });
 }
 
 settingsDialog.addEventListener("click", (e) => { if (e.target === settingsDialog) settingsDialog.close(); });
 document.getElementById("settingsBtn").addEventListener("click", openSettings);
 
-function reconnect() {
-  const id = state.week.id;
-  state.week = null; // tving ny ListStore
-  selectWeek(id).then(() => { if (currentRoute().name === "list") renderList(); });
+/* ---------------- Innlogging ---------------- */
+function renderLogin(message = "") {
+  document.body.classList.add("locked");
+  document.title = "Logg inn – Matplan";
+  if (settingsDialog.open) settingsDialog.close();
+  app.innerHTML = `
+    <section class="login">
+      <div class="login-card">
+        <div class="login-logo" aria-hidden="true"><img src="icons/icon.svg" alt="" width="72" height="72"></div>
+        <h1>Matplan</h1>
+        <p class="login-sub">Familiens ukesmeny og handleliste</p>
+        <form id="loginForm" novalidate>
+          <label class="field">
+            <span>E-post</span>
+            <input id="email" type="email" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false" required value="${esc(storage.get("matplan:lastEmail", ""))}">
+          </label>
+          <label class="field">
+            <span>Passord</span>
+            <input id="password" type="password" autocomplete="current-password" required>
+          </label>
+          <p class="login-msg" id="loginMsg" role="alert">${esc(message)}</p>
+          <button class="btn btn-primary btn-block" type="submit" id="loginBtn">Logg inn</button>
+        </form>
+        <button class="btn btn-ghost btn-sm" type="button" id="forgotBtn">Glemt passord?</button>
+      </div>
+      <p class="login-foot">🔒 Kun for familien. Kontoer opprettes av administrator.</p>
+    </section>`;
+
+  const form = app.querySelector("#loginForm");
+  const email = app.querySelector("#email");
+  const password = app.querySelector("#password");
+  const msg = app.querySelector("#loginMsg");
+  const btn = app.querySelector("#loginBtn");
+  (email.value ? password : email).focus();
+
+  form.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    msg.textContent = ""; msg.classList.remove("ok");
+    if (!email.value.trim() || !password.value) { msg.textContent = "Fyll inn e-post og passord."; return; }
+    btn.disabled = true; btn.textContent = "Logger inn …";
+    try {
+      await signIn(email.value, password.value);
+      storage.set("matplan:lastEmail", email.value.trim());
+      // onAuthStateChanged starter appen
+    } catch (err) {
+      msg.textContent = errorText(err);
+      btn.disabled = false; btn.textContent = "Logg inn";
+      password.select();
+    }
+  });
+
+  app.querySelector("#forgotBtn").addEventListener("click", async () => {
+    msg.classList.remove("ok");
+    if (!email.value.trim()) { msg.textContent = "Skriv inn e-postadressen din først."; email.focus(); return; }
+    try {
+      await resetPassword(email.value);
+      msg.textContent = "Hvis adressen har en konto, er det sendt en e-post med lenke for nytt passord.";
+      msg.classList.add("ok");
+    } catch (err) { msg.textContent = errorText(err); }
+  });
+}
+
+async function startApp() {
+  document.body.classList.remove("locked");
+  if (!state.weeks.length) {
+    const index = await fetchJSON("data/weeks.json");
+    state.weeks = index.weeks;
+  }
+  const route = currentRoute();
+  const id = route.weekId || pickDefaultWeek(state.weeks);
+  state.week = null; // ny tilkobling for innlogget bruker
+  await selectWeek(id);
+  await render();
+}
+
+function onAuthChange(user) {
+  if (user) startApp().catch(showLoadError);
+  else {
+    state.store?.disconnect();
+    state.store = null; state.week = null;
+    updateBadge();
+    renderLogin();
+  }
+}
+
+function showLoadError(err) {
+  console.error(err);
+  app.innerHTML = `<section class="page"><div class="empty"><div class="big">📡</div><p>Kunne ikke hente matplanen. Sjekk nettet og prøv igjen.</p><p style="margin-top:12px"><button class="btn" onclick="location.reload()">Prøv igjen</button></p></div></section>`;
 }
 
 /* ---------------- Diverse ---------------- */
@@ -570,31 +618,14 @@ window.addEventListener("scroll", () => topbar.classList.toggle("scrolled", wind
 
 /* ---------------- Oppstart ---------------- */
 async function init() {
-  // Lenke med familiekode: ?familie=xxxx
-  const params = new URLSearchParams(location.search);
-  if (params.has("familie")) {
-    const ok = setFamilyCode(params.get("familie"));
-    history.replaceState(null, "", location.pathname + location.hash);
-    if (ok) setTimeout(() => toast(isCloudConfigured() ? "Koblet til familiens handleliste 🎉" : "Familiekode lagret"), 400);
-  }
-
-  try {
-    const index = await fetchJSON("data/weeks.json");
-    state.weeks = index.weeks;
-    const route = currentRoute();
-    const saved = storage.get("matplan:week", null);
-    const defaultId = pickDefaultWeek(state.weeks);
-    // Bruk lagret uke bare hvis den fortsatt er "aktuell" (ellers hopp til denne uka)
-    const id = route.weekId || (saved && saved === defaultId ? saved : defaultId);
-    await selectWeek(id);
-    await render();
-  } catch (err) {
-    console.error(err);
-    app.innerHTML = `<section class="page"><div class="empty"><div class="big">📡</div><p>Kunne ikke hente matplanen. Sjekk nettet og prøv igjen.</p><p style="margin-top:12px"><button class="btn" onclick="location.reload()">Prøv igjen</button></p></div></section>`;
-  }
-
   if ("serviceWorker" in navigator && location.protocol === "https:") {
     navigator.serviceWorker.register("sw.js").catch(() => {});
+  }
+  try {
+    const user = await initAuth(onAuthChange);
+    onAuthChange(user);
+  } catch (err) {
+    showLoadError(err);
   }
 }
 

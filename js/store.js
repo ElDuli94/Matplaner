@@ -1,35 +1,9 @@
 // Lagring av handlelisten.
-// - Uten Firebase: lagres i nettleseren (localStorage) på denne enheten.
-// - Med Firebase + familiekode: synkroniseres i sanntid mellom alle i familien.
-import { firebaseConfig } from "./firebase-config.js";
-import { storage, randomCode } from "./util.js";
-
-const FB_VERSION = "10.12.2";
-const FAMILY_KEY = "matplan:family";
-
-export const isCloudConfigured = () => !!(firebaseConfig && firebaseConfig.databaseURL);
-export const getFamilyCode = () => storage.get(FAMILY_KEY, null);
-export function setFamilyCode(code) {
-  const clean = String(code || "").trim().toLowerCase().replace(/[^a-z0-9]/g, "");
-  storage.set(FAMILY_KEY, clean.length >= 10 ? clean : null);
-  return getFamilyCode();
-}
-export const newFamilyCode = () => setFamilyCode(randomCode(12));
-
-let fbPromise = null;
-function loadFirebase() {
-  if (!fbPromise) {
-    const base = `https://www.gstatic.com/firebasejs/${FB_VERSION}`;
-    fbPromise = Promise.all([
-      import(`${base}/firebase-app.js`),
-      import(`${base}/firebase-database.js`),
-    ]).then(([app, db]) => {
-      const fbApp = app.initializeApp(firebaseConfig);
-      return { db: db.getDatabase(fbApp), ...db };
-    });
-  }
-  return fbPromise;
-}
+// Innloggede brukere deler én liste per uke i Firebase (sanntid).
+// En lokal kopi lagres også, slik at listen vises med en gang og fungerer uten nett.
+import { loadDatabase } from "./firebase.js";
+import { getUser } from "./auth.js";
+import { storage } from "./util.js";
 
 /** Handlelisten for én uke. */
 export class ListStore {
@@ -38,7 +12,7 @@ export class ListStore {
     this.localKey = `matplan:list:${weekId}`;
     this.state = normalize(storage.get(this.localKey, {}));
     this.listeners = new Set();
-    this.status = "local"; // local | connecting | online | offline
+    this.status = "connecting"; // connecting | online | offline
     this.remote = null;
     this.unsubscribers = [];
     this.connect();
@@ -48,31 +22,25 @@ export class ListStore {
   emit() { for (const fn of this.listeners) fn(this.state, this.status); }
 
   async connect() {
-    const code = getFamilyCode();
-    if (!isCloudConfigured() || !code) { this.status = "local"; this.emit(); return; }
-    this.status = "connecting"; this.emit();
+    if (!getUser()) { this.status = "offline"; this.emit(); return; }
     try {
-      const fb = await loadFirebase();
-      const path = `households/${code}/lists/${this.weekId}`;
-      this.remote = { fb, ref: fb.ref(fb.db, path) };
-
-      // Første gang familien kobler til: last opp det som allerede er huket av lokalt.
-      const snap = await fb.get(this.remote.ref);
-      if (!snap.exists() && (Object.keys(this.state.checked).length || Object.keys(this.state.custom).length)) {
-        await fb.set(this.remote.ref, this.state);
-      }
+      const fb = await loadDatabase();
+      this.remote = { fb, ref: fb.ref(fb.db, `family/lists/${this.weekId}`) };
 
       this.unsubscribers.push(fb.onValue(this.remote.ref, (s) => {
         this.state = normalize(s.val() || {});
         storage.set(this.localKey, this.state);
         this.emit();
+      }, (err) => {
+        console.warn("Ingen tilgang til handlelisten:", err);
+        this.status = "offline"; this.emit();
       }));
       this.unsubscribers.push(fb.onValue(fb.ref(fb.db, ".info/connected"), (s) => {
         this.status = s.val() ? "online" : "offline";
         this.emit();
       }));
     } catch (err) {
-      console.warn("Kunne ikke koble til Firebase:", err);
+      console.warn("Kunne ikke koble til databasen:", err);
       this.status = "offline";
       this.remote = null;
       this.emit();
@@ -97,14 +65,15 @@ export class ListStore {
     }
   }
 
-  isChecked(key) { return !!this.state.checked[key]; }
   setChecked(key, on) { this.patch({ [`checked/${key}`]: on ? true : null }); }
 
   addCustom(name) {
     const id = `c${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`;
     this.patch({ [`custom/${id}`]: { name: name.slice(0, 80), checked: false, t: Date.now() } });
   }
-  setCustomChecked(id, on) { this.patch({ [`custom/${id}/checked`]: !!on }); }
+  setCustomChecked(id, on) {
+    if (this.state.custom[id]) this.patch({ [`custom/${id}/checked`]: !!on });
+  }
   removeCustom(id) { this.patch({ [`custom/${id}`]: null }); }
 
   reset() {

@@ -4,7 +4,8 @@ Familiens ukesplan med sunne middager, detaljerte oppskrifter og en felles handl
 
 - **Ukeplan**: 7 middager uten svinekjøtt. Raske retter i ukedagene (ca. 30 min) og mer tid i helgen.
 - **Oppskrifter**: Antall porsjoner kan justeres, ingredienser og steg kan hukes av, og «Hold skjermen på» holder skjermen våken mens du lager mat.
-- **Handleliste**: Ingrediensene fra hele uken er slått sammen og sortert etter avdelingene på Rema 1000. Du kan legge til egne varer, og listen kan deles med familien i sanntid (via Firebase).
+- **Handleliste**: Ingrediensene fra hele uken er slått sammen og sortert etter avdelingene på Rema 1000. Du kan legge til egne varer, og listen deles med familien i sanntid (via Firebase).
+- **Innlogging**: Bare familiemedlemmer med konto får tilgang.
 - **Rask**: Siden er laget med ren HTML/CSS/JS uten rammeverk og byggesteg. Den fungerer uten nett og kan legges på hjemskjermen som en app.
 
 ## Struktur
@@ -14,8 +15,10 @@ index.html              Siden
 css/style.css           Design (lyst og mørkt tema)
 js/app.js               Visninger: ukeplan, oppskrift, handleliste, innstillinger
 js/shopping.js          Slår sammen ingredienser til handleliste (Rema-rekkefølge)
-js/store.js             Lagring/synk av handlelisten (lokalt eller Firebase)
-js/firebase-config.js   Firebase-oppsett (null = kun lokal lagring)
+js/store.js             Synk av handlelisten (Firebase + lokal kopi)
+js/auth.js              Innlogging (Firebase Authentication)
+js/firebase.js          Laster Firebase ved behov
+js/firebase-config.js   Firebase-oppsett
 data/weeks.json         Oversikt over alle uker
 data/weeks/ÅÅÅÅ-Wnn.json  Én fil per uke med dager og oppskrifter
 sw.js                   Gjør at siden virker offline
@@ -36,16 +39,19 @@ Hver ingrediens har en `cat` (avdeling): `grønt`, `brød`, `kjøtt`, `fisk`, `m
 2. Gå til **Settings → Pages** på GitHub og velg **Source: GitHub Actions**.
 3. Siden publiseres automatisk til `https://<brukernavn>.github.io/Matplaner/` hver gang `main` oppdateres.
 
-## Delt handleliste med Firebase
+## Innlogging og delt handleliste (Firebase)
 
-1. Gå til <https://console.firebase.google.com>, velg **Add project**, gi det et navn (f.eks. «matplan») og slå av Analytics.
-2. Velg **Build → Realtime Database → Create database**. Velg lokasjon **Belgium (europe-west1)** og «Start in locked mode».
-3. Åpne fanen **Rules**, lim inn innholdet fra `database.rules.json` og trykk **Publish**.
-4. Gå til **Project settings** (tannhjulet) → **Your apps** → klikk `</>` (Web). Registrer appen. Du trenger ikke Hosting.
-5. Kopier `firebaseConfig`-verdiene inn i `js/firebase-config.js`. Pass på at `databaseURL` er med.
-6. Åpne siden, gå til ⚙️ → **Lag familiekode** → **Del lenke** og send lenken til familien.
+Siden krever innlogging med e-post og passord. Alle innloggede deler samme handleliste i sanntid.
 
-Firebase-verdiene er ikke hemmelige. Listen beskyttes av familiekoden (12 tilfeldige tegn): bare de som har koden, kan lese og skrive listen.
+Oppsett i [Firebase-konsollen](https://console.firebase.google.com/project/matplaner-60d75):
+
+1. **Authentication → Get started → Sign-in method → Email/Password** → Enable.
+2. **Authentication → Settings → User actions**: fjern haken for **Enable create (sign-up)**, slik at ingen kan registrere seg selv.
+3. **Authentication → Settings → Authorized domains**: legg til `elduli94.github.io`.
+4. **Authentication → Users → Add user**: én bruker per familiemedlem.
+5. **Realtime Database → Rules**: lim inn `database.rules.json` og trykk Publish.
+
+Merk: Selve ukeplanen og oppskriftene ligger i dette (offentlige) repoet. Innloggingen beskytter handlelisten og familiens data i databasen.
 
 ## Kjøre lokalt
 

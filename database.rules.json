@@ -2,14 +2,12 @@
   "rules": {
     ".read": false,
     ".write": false,
-    "households": {
-      "$code": {
-        ".read": "$code.length >= 10",
-        ".write": "$code.length >= 10",
-        "lists": {
-          "$week": {
-            ".validate": "$week.matches(/^[0-9]{4}-W[0-9]{2}$/)"
-          }
+    "family": {
+      ".read": "auth != null",
+      ".write": "auth != null",
+      "lists": {
+        "$week": {
+          ".validate": "$week.matches(/^[0-9]{4}-W[0-9]{2}$/)"
         }
       }
     }

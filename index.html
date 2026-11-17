@@ -14,11 +14,13 @@
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
   <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
-  <link rel="preload" href="data/weeks.json" as="fetch" crossorigin>
-  <link rel="stylesheet" href="css/style.css?v=1">
-  <script type="module" src="js/app.js?v=1"></script>
+  <link rel="preconnect" href="https://www.gstatic.com" crossorigin>
+  <link rel="modulepreload" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js">
+  <link rel="modulepreload" href="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js">
+  <link rel="stylesheet" href="css/style.css?v=2">
+  <script type="module" src="js/app.js?v=2"></script>
 </head>
-<body>
+<body class="locked">
   <header class="topbar">
     <div class="topbar-inner">
       <a class="brand" href="#/" aria-label="Matplan – til ukesoversikten">
@@ -38,7 +40,7 @@
   <main id="app" tabindex="-1">
     <div class="loading" aria-live="polite">
       <div class="spinner" aria-hidden="true"></div>
-      <p>Henter ukens matplan …</p>
+      <p>Laster Matplan …</p>
     </div>
   </main>
 
