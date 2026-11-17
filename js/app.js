@@ -541,7 +541,12 @@ const passwordFields = (confirm) => `
   <label class="field"><span>Passord</span>
     <input id="password" type="password" autocomplete="${confirm ? "new-password" : "current-password"}" required minlength="6"></label>
   ${confirm ? `<label class="field"><span>Gjenta passord</span>
-    <input id="password2" type="password" autocomplete="new-password" required minlength="6"></label>` : ""}`;
+    <input id="password2" type="password" autocomplete="new-password" required minlength="6"></label>` : ""}
+  <label class="check-row remember">
+    <input type="checkbox" id="remember" ${storage.get("matplan:remember", true) ? "checked" : ""}>
+    <span class="box" aria-hidden="true"></span>
+    <span class="label">Husk meg på denne enheten</span>
+  </label>`;
 
 function renderLogin(mode = "login", message = "") {
   const register = mode === "register";
@@ -564,7 +569,7 @@ function renderLogin(mode = "login", message = "") {
   (email.value ? app.querySelector("#password") : email).focus();
   app.querySelector("#switchBtn").addEventListener("click", () => renderLogin(register ? "login" : "register"));
 
-  bindAuthForm(async (em, pw) => (register ? signUp(em, pw) : signIn(em, pw)), register, register ? "Oppretter konto …" : "Logger inn …");
+  bindAuthForm(async (em, pw, rem) => (register ? signUp(em, pw, rem) : signIn(em, pw, rem)), register, register ? "Oppretter konto …" : "Logger inn …");
 
   app.querySelector("#forgotBtn")?.addEventListener("click", async () => {
     msg.classList.remove("ok");
@@ -594,7 +599,9 @@ function bindAuthForm(action, confirm, busyText) {
     if (confirm && password.value !== password2.value) { msg.textContent = "Passordene er ikke like."; password2.focus(); return; }
     btn.disabled = true; btn.textContent = busyText;
     try {
-      await action(email.value, password.value);
+      const remember = app.querySelector("#remember")?.checked ?? true;
+      storage.set("matplan:remember", remember);
+      await action(email.value, password.value, remember);
       storage.set("matplan:lastEmail", email.value.trim());
       // onAuthStateChanged tar over herfra
     } catch (err) {
@@ -637,9 +644,9 @@ async function renderInvite(token, mode = "register") {
     "🔒 Invitasjonen gjelder bare for denne e-postadressen.");
   app.querySelector("#password").focus();
   app.querySelector("#switchBtn").addEventListener("click", () => renderInvite(token, register ? "login" : "register"));
-  bindAuthForm(async (em, pw) => {
+  bindAuthForm(async (em, pw, rem) => {
     try {
-      await (register ? signUp(em, pw) : signIn(em, pw));
+      await (register ? signUp(em, pw, rem) : signIn(em, pw, rem));
     } catch (err) {
       if (err?.code === "auth/email-already-in-use") { renderInvite(token, "login"); }
       throw err;

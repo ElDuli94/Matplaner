@@ -504,3 +504,5 @@ body.locked .topbar, body.locked .tabs-bottom { display: none; }
 .admin-item .row { display: flex; gap: 6px; }
 .invite-ready { margin-top: 14px; padding: 14px; border-radius: var(--radius-sm); background: var(--accent-soft); display: grid; gap: 10px; }
 .invite-ready .row { display: flex; gap: 8px; flex-wrap: wrap; }
+.check-row.remember { min-height: 40px; padding: 2px 0; font-size: .95rem; }
+.check-row.remember input:checked ~ .label { color: var(--text); text-decoration: none; }

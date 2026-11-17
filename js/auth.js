@@ -34,13 +34,20 @@ const ERRORS = {
 export const errorText = (err) =>
   ERRORS[err?.code] || (String(err?.message || "").includes("PERMISSION_DENIED") ? ERRORS.PERMISSION_DENIED : "Noe gikk galt. Prøv igjen.");
 
-export async function signIn(email, password) {
+/** Husk meg = forbli innlogget på enheten. Uten = logges ut når nettleseren lukkes. */
+async function applyRemember(fb, remember) {
+  await fb.setPersistence(fb.auth, remember ? fb.indexedDBLocalPersistence : fb.browserSessionPersistence);
+}
+
+export async function signIn(email, password, remember = true) {
   const fb = await loadAuth();
+  await applyRemember(fb, remember);
   await fb.signInWithEmailAndPassword(fb.auth, email.trim(), password);
 }
 
-export async function signUp(email, password) {
+export async function signUp(email, password, remember = true) {
   const fb = await loadAuth();
+  await applyRemember(fb, remember);
   await fb.createUserWithEmailAndPassword(fb.auth, email.trim(), password);
 }
 
