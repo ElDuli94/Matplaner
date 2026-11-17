@@ -1,15 +1,12 @@
 // Firebase-oppsett for delt handleliste.
-// La stå som null for å bare lagre listen på hver enkelt enhet.
-// Se README.md ("Delt handleliste med Firebase") for hvordan du fyller inn dette.
-// Disse verdiene er ikke hemmelige – tilgangen styres av reglene i database.rules.json.
-export const firebaseConfig = null;
-
-/* Eksempel:
+// Disse verdiene er ikke hemmelige – tilgangen styres av reglene i database.rules.json
+// og familiekoden (bare de som har koden kan lese/skrive listen).
 export const firebaseConfig = {
-  apiKey: "AIza...",
-  authDomain: "matplan-xxxx.firebaseapp.com",
-  databaseURL: "https://matplan-xxxx-default-rtdb.europe-west1.firebasedatabase.app",
-  projectId: "matplan-xxxx",
-  appId: "1:123:web:abc",
+  apiKey: "AIzaSyBgDGlM8JgGrFgOxnZsUO58d2SFNsPopIM",
+  authDomain: "matplaner-60d75.firebaseapp.com",
+  databaseURL: "https://matplaner-60d75-default-rtdb.europe-west1.firebasedatabase.app",
+  projectId: "matplaner-60d75",
+  storageBucket: "matplaner-60d75.firebasestorage.app",
+  messagingSenderId: "960753874942",
+  appId: "1:960753874942:web:79c6a10d54a002dc9172af",
 };
-*/
