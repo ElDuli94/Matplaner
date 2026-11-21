@@ -658,12 +658,12 @@ async function renderInvite(token, mode = "register") {
   }, register, register ? "Oppretter konto …" : "Logger inn …");
 }
 
-function renderPending(user) {
+function renderPending(user, rulesProblem = false) {
   document.title = "Venter på godkjenning – Istrefi Shopping";
   authShell(`
     <h1>Venter på godkjenning</h1>
     <p class="login-sub">Kontoen <strong>${esc(user.email)}</strong> er opprettet. Administrator må legge deg til i en familie før du ser handlelisten.</p>
-    <p class="login-msg" id="loginMsg" role="alert"></p>
+    <p class="login-msg" id="loginMsg" role="alert">${rulesProblem ? "Får ikke kontakt med databasen som forventet. Sjekk at de nyeste databasereglene er publisert i Firebase." : ""}</p>
     <button class="btn btn-primary btn-block" type="button" id="recheckBtn">Sjekk igjen</button>
     <button class="btn btn-ghost btn-sm" type="button" id="logoutBtn2">Logg ut</button>
     <button class="link-btn small" type="button" id="adminBtn">Er du administrator?</button>`, "");
@@ -671,8 +671,13 @@ function renderPending(user) {
   app.querySelector("#recheckBtn").addEventListener("click", () => onAuthChange(user));
   app.querySelector("#logoutBtn2").addEventListener("click", () => signOut());
   app.querySelector("#adminBtn").addEventListener("click", async () => {
+    const msg = app.querySelector("#loginMsg");
+    msg.textContent = "Sjekker …";
     try { await becomeAdmin(user); onAuthChange(user); }
-    catch { app.querySelector("#loginMsg").textContent = "Denne kontoen kan ikke bli administrator."; }
+    catch (err) {
+      console.warn(err);
+      msg.textContent = "Kunne ikke gjøre kontoen til administrator. Enten er de nye databasereglene ikke publisert, eller så er det allerede registrert en administrator (en annen konto-ID) i databasen.";
+    }
   });
 }
 
@@ -730,7 +735,7 @@ async function onAuthChange(user) {
       hideSplash();
     } else {
       requestAccess(user).catch(() => {});
-      renderPending(user);
+      renderPending(user, access.rulesProblem);
     }
   } catch (err) { showLoadError(err); }
 }

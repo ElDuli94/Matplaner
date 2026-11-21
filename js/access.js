@@ -20,24 +20,31 @@ const db = () => loadDatabase();
 /** Hvem er brukeren? { admin, family, familyName, role }. Faller tilbake på sist kjente svar uten nett. */
 export async function getAccess(user) {
   const cacheKey = `shop:access:${user.uid}`;
+  const cached = storage.get(cacheKey, null);
   try {
     const fb = await db();
-    const [a, u] = await Promise.all([
+    // Leses hver for seg: admin-status skal fungere selv om resten feiler.
+    const [a, u] = await Promise.allSettled([
       fb.get(fb.ref(fb.db, `admins/${user.uid}`)),
       fb.get(fb.ref(fb.db, `users/${user.uid}`)),
     ]);
-    const profile = u.val();
+    if (a.status === "rejected" && u.status === "rejected") throw a.reason;
+    if (u.status === "rejected") console.warn("Kunne ikke lese brukerprofil (er de nye databasereglene publisert?)", u.reason);
+    const profile = u.status === "fulfilled" ? u.value.val() : null;
     let familyName = null;
     if (profile?.family) {
-      const info = await fb.get(fb.ref(fb.db, `families/${profile.family}/info/name`));
-      familyName = info.val();
+      try { familyName = (await fb.get(fb.ref(fb.db, `families/${profile.family}/info/name`))).val(); } catch { /* ignorer */ }
     }
-    const access = { admin: a.val() === true, family: profile?.family || null, role: profile?.role || null, familyName };
+    const access = {
+      admin: a.status === "fulfilled" && a.value.val() === true,
+      family: profile?.family || null, role: profile?.role || null, familyName,
+      rulesProblem: u.status === "rejected",
+    };
     storage.set(cacheKey, access);
     return access;
   } catch (err) {
     console.warn("Kunne ikke sjekke tilgang:", err);
-    return storage.get(cacheKey, { admin: false, family: null, role: null, familyName: null });
+    return { ...(cached || { admin: false, family: null, role: null, familyName: null }), rulesProblem: true };
   }
 }
 
