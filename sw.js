@@ -1,11 +1,11 @@
 // Service worker: gjør siden rask og lar den fungere uten nett (f.eks. i butikken).
-const VERSION = "v9";
+const VERSION = "v10";
 const CACHE = `shop-${VERSION}`;
 const CORE = [
   "./",
   "index.html",
-  "css/style.css?v=8",
-  "js/app.js?v=8",
+  "css/style.css?v=9",
+  "js/app.js?v=9",
   "js/util.js",
   "js/categories.js",
   "js/list.js",

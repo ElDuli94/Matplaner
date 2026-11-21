@@ -563,7 +563,7 @@ function renderLogin(mode = "login", message = "") {
   const register = mode === "register";
   document.title = register ? "Opprett konto – Istrefi Shopping" : "Logg inn – Istrefi Shopping";
   authShell(`
-    <h1>Istrefi Shopping</h1>
+    <h1 class="wordmark">Istrefi<span>Shopping</span></h1>
     <p class="login-sub">${register ? "Opprett en konto. Administrator plasserer deg i riktig familie." : "Familiens felles handleliste"}</p>
     <form id="authForm" novalidate>
       <label class="field"><span>E-post</span>
@@ -574,6 +574,7 @@ function renderLogin(mode = "login", message = "") {
     </form>
     ${register ? "" : `<button class="btn btn-ghost btn-sm" type="button" id="forgotBtn">Glemt passord?</button>`}
     <p class="login-switch">${register ? `Har du allerede konto? <button type="button" class="link-btn" id="switchBtn">Logg inn</button>` : `Ny her? <button type="button" class="link-btn" id="switchBtn">Opprett konto</button>`}</p>`);
+  hideSplash();
 
   const email = app.querySelector("#email");
   const msg = app.querySelector("#loginMsg");
@@ -630,6 +631,7 @@ async function renderInvite(token, mode = "register") {
       <p class="login-sub">${!invite ? "Lenken er ugyldig eller slettet." : invite.usedBy ? "Invitasjonen er allerede brukt." : "Invitasjonen har gått ut på dato."} Be om en ny invitasjon, eller logg inn hvis du allerede har konto.</p>
       <button class="btn btn-primary btn-block" type="button" id="toLogin">Til innlogging</button>`);
     app.querySelector("#toLogin").addEventListener("click", () => renderLogin());
+    hideSplash();
     return;
   }
 
@@ -647,6 +649,7 @@ async function renderInvite(token, mode = "register") {
     </form>
     <p class="login-switch">${register ? `Har du allerede konto? <button type="button" class="link-btn" id="switchBtn">Logg inn</button>` : `Ny bruker? <button type="button" class="link-btn" id="switchBtn">Opprett konto</button>`}</p>`,
   "🔒 Invitasjonen gjelder bare for denne e-postadressen.");
+  hideSplash();
   app.querySelector("#password").focus();
   app.querySelector("#switchBtn").addEventListener("click", () => renderInvite(token, register ? "login" : "register"));
   bindAuthForm(async (em, pw, rem) => {
@@ -664,6 +667,7 @@ function renderPending(user) {
     <button class="btn btn-primary btn-block" type="button" id="recheckBtn">Sjekk igjen</button>
     <button class="btn btn-ghost btn-sm" type="button" id="logoutBtn2">Logg ut</button>
     <button class="link-btn small" type="button" id="adminBtn">Er du administrator?</button>`, "");
+  hideSplash();
   app.querySelector("#recheckBtn").addEventListener("click", () => onAuthChange(user));
   app.querySelector("#logoutBtn2").addEventListener("click", () => signOut());
   app.querySelector("#adminBtn").addEventListener("click", async () => {
@@ -723,6 +727,7 @@ async function onAuthChange(user) {
       connectList();
       applyChrome();
       render();
+      hideSplash();
     } else {
       requestAccess(user).catch(() => {});
       renderPending(user);
@@ -732,7 +737,21 @@ async function onAuthChange(user) {
 
 function showLoadError(err) {
   console.error(err);
+  hideSplash();
   app.innerHTML = `<section class="page"><div class="empty"><div class="big">📡</div><p>Kunne ikke laste. Sjekk nettet og prøv igjen.</p><p style="margin-top:12px"><button class="btn" onclick="location.reload()">Prøv igjen</button></p></div></section>`;
+}
+
+/* ================= Lasteskjerm ================= */
+const SPLASH_MIN_MS = 1900; // lang nok til at animasjonen rekker å vises
+function hideSplash() {
+  const el = document.getElementById("splash");
+  if (!el || el.dataset.done) return;
+  el.dataset.done = "1";
+  const wait = Math.max(0, SPLASH_MIN_MS - performance.now());
+  setTimeout(() => {
+    el.classList.add("hide");
+    setTimeout(() => el.remove(), 600);
+  }, wait);
 }
 
 /* ================= Diverse ================= */
