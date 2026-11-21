@@ -119,6 +119,12 @@ function renderList() {
       const n = state.list.clearChecked();
       if (n) toast(`${n} ${n === 1 ? "vare" : "varer"} fjernet`, { label: "Angre", fn: () => state.list.restore(removed) });
     }
+    if (e.target.closest("#clearAllBtn")) {
+      const all = Object.entries(state.list.items).filter(([, it]) => it && it.name).map(([id, it]) => [id, { ...it }]);
+      if (!all.length || !confirm(`Tømme hele handlelisten (${all.length} ${all.length === 1 ? "vare" : "varer"})? Dette gjelder for hele familien.`)) return;
+      state.list.clearAll();
+      toast("Handlelisten er tømt", { label: "Angre", fn: () => state.list.restore(all) });
+    }
     if (e.target.closest("#hideBtn")) {
       state.hideChecked = !state.hideChecked;
       storage.set("shop:hideChecked", state.hideChecked);
@@ -179,7 +185,10 @@ function renderListBody() {
           </div>
         </div>
         ${state.hideChecked ? "" : `<ul class="items">${done.map(row).join("")}</ul>`}
-      </section>` : ""}`;
+      </section>` : ""}
+    <div class="list-footer">
+      <button class="btn btn-ghost danger" type="button" id="clearAllBtn">🗑 Tøm hele listen</button>
+    </div>`;
 }
 
 /* ---------- Rediger vare ---------- */

@@ -97,6 +97,14 @@ export class FamilyList {
     return Object.keys(updates).length;
   }
 
+  /** Tøm hele listen. */
+  clearAll() {
+    const updates = {};
+    for (const id of Object.keys(this.items)) updates[`items/${id}`] = null;
+    if (Object.keys(updates).length) this.write(updates);
+    return Object.keys(updates).length;
+  }
+
   /** Gjenopprett varer (angre). */
   restore(entries) {
     const updates = {};
