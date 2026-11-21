@@ -1,7 +1,7 @@
 {
-  "name": "Matplan – familiens ukesmeny",
-  "short_name": "Matplan",
-  "description": "Ukesplan med sunne middager og felles handleliste.",
+  "name": "Istrefi Shopping",
+  "short_name": "Istrefi Shopping",
+  "description": "Familiens felles handleliste.",
   "lang": "nb",
   "start_url": "./",
   "scope": "./",

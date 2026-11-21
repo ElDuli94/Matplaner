@@ -1,571 +1,514 @@
-import { esc, dayName, shortDate, rangeLabel, todayISO, formatTime, formatAmount, storage, slug } from "./util.js";
-import { buildShoppingList } from "./shopping.js";
-import { ListStore } from "./store.js";
+import { esc, storage, fmtDate } from "./util.js";
+import { CATEGORIES, CAT_BY_ID } from "./categories.js";
+import { FamilyList } from "./list.js";
 import { initAuth, getUser, signIn, signUp, signOut, resetPassword, errorText } from "./auth.js";
-import { getAccess, getInvite, createInvite, inviteLink, claimInvite, requestAccess, becomeAdmin, loadAdminData, approveRequest, denyRequest, deleteInvite, removeMember } from "./access.js";
+import {
+  getAccess, getInvite, createInvite, inviteLink, claimInvite, deleteInvite, familyInvites, requestAccess,
+  becomeAdmin, loadAdminData, createFamily, renameFamily, deleteFamily, placeUser, setRole, removeMember,
+  denyRequest, familyMembers,
+} from "./access.js";
 
 const app = document.getElementById("app");
 const settingsDialog = document.getElementById("settings");
+const editDialog = document.getElementById("editSheet");
 const toastEl = document.getElementById("toast");
 
 const state = {
-  weeks: [],
-  weekCache: new Map(),
-  week: null,
-  store: null,
-  servings: storage.get("matplan:servings", 4),
-  hideChecked: storage.get("matplan:hideChecked", false),
-  closedGroups: new Set(storage.get("matplan:closedGroups", ["basis"])),
-  wakeLock: null,
-  access: { admin: false, member: false },
+  access: { admin: false, family: null, role: null, familyName: null },
+  list: null,
   pendingInvite: null,
+  hideChecked: storage.get("shop:hideChecked", false),
 };
 
-/* ---------------- Tema ---------------- */
+/* ================= Tema ================= */
 function applyTheme(theme) {
   if (theme === "light" || theme === "dark") document.documentElement.dataset.theme = theme;
   else delete document.documentElement.dataset.theme;
 }
-applyTheme(storage.get("matplan:theme", "auto"));
+applyTheme(storage.get("shop:theme", "auto"));
 
-/* ---------------- Data ---------------- */
-async function fetchJSON(url) {
-  const res = await fetch(url, { cache: "no-cache" });
-  if (!res.ok) throw new Error(`${res.status} ${url}`);
-  return res.json();
-}
-
-async function loadWeek(id) {
-  if (!state.weekCache.has(id)) state.weekCache.set(id, fetchJSON(`data/weeks/${id}.json`));
-  return state.weekCache.get(id);
-}
-
-function pickDefaultWeek(weeks) {
-  const today = todayISO();
-  const current = weeks.find((w) => w.start <= today && today <= w.end);
-  if (current) return current.id;
-  const past = weeks.filter((w) => w.start <= today).sort((a, b) => b.start.localeCompare(a.start));
-  if (past.length) {
-    // Har det kommet en plan for neste uke, vis den i stedet for en gammel uke
-    const upcoming = weeks.filter((w) => w.start > today).sort((a, b) => a.start.localeCompare(b.start));
-    return (upcoming[0] || past[0]).id;
-  }
-  return weeks[0].id;
-}
-
-async function selectWeek(id) {
-  const week = await loadWeek(id);
-  if (state.week?.id === week.id) return;
-  state.week = week;
-  storage.set("matplan:week", id);
-  state.store?.disconnect();
-  state.store = new ListStore(week.id);
-  state.store.onChange(() => {
-    updateBadge();
-    const r = currentRoute().name;
-    if (r === "list") renderListBody();
-    else if (r === "week" && getUser()) renderWeek(true);
-  });
-  updateBadge();
-}
-
-/* ---------------- Ruting ---------------- */
+/* ================= Ruting ================= */
 function currentRoute() {
-  const parts = location.hash.replace(/^#\/?/, "").split("/").filter(Boolean).map(decodeURIComponent);
-  if (parts[0] === "handleliste") return { name: "list" };
-  if (parts[0] === "oppskrift" && parts[1]) return { name: "recipe", id: parts[1] };
-  if (parts[0] === "uke" && parts[1]) return { name: "week", weekId: parts[1] };
-  if (parts[0] === "admin") return { name: "admin" };
-  return { name: "week" };
+  const p = location.hash.replace(/^#\/?/, "").split("/")[0];
+  if (p === "familie") return "family";
+  if (p === "admin") return "admin";
+  return "list";
 }
 
-async function render() {
+function render() {
   const route = currentRoute();
-  if (route.weekId && state.weeks.some((w) => w.id === route.weekId)) {
-    await selectWeek(route.weekId);
-  }
-  releaseWakeLock();
   document.querySelectorAll("[data-tab]").forEach((a) => {
-    a.classList.toggle("active", (a.dataset.tab === "handleliste") === (route.name === "list"));
-    if (a.classList.contains("active")) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
+    const on = a.dataset.tab === route;
+    a.classList.toggle("active", on);
+    if (on) a.setAttribute("aria-current", "page"); else a.removeAttribute("aria-current");
   });
-
-  if (route.name === "list") renderList();
-  else if (route.name === "admin" && state.access.admin) renderAdmin();
-  else if (route.name === "recipe") renderRecipe(route.id);
-  else renderWeek();
+  if (route === "admin" && state.access.admin) renderAdmin();
+  else if (route === "family") renderFamily();
+  else renderList();
 }
 
 window.addEventListener("hashchange", () => {
-  if (!getUser() || !state.week) return;
-  render().then(() => { window.scrollTo({ top: 0 }); app.focus({ preventScroll: true }); });
+  if (!getUser() || document.body.classList.contains("locked")) return;
+  render();
+  window.scrollTo({ top: 0 });
+  app.focus({ preventScroll: true });
 });
 
-/* ---------------- Ukeplan ---------------- */
-function weekSelectHTML() {
-  if (state.weeks.length < 2) return "";
-  const opts = [...state.weeks].sort((a, b) => b.start.localeCompare(a.start))
-    .map((w) => `<option value="${esc(w.id)}" ${w.id === state.week.id ? "selected" : ""}>${esc(w.title)} · ${esc(rangeLabel(w.start, w.end))}</option>`).join("");
-  return `<label class="visually-hidden" for="weekSelect">Velg uke</label><select id="weekSelect" class="week-select">${opts}</select>`;
+/* ================= Handleliste ================= */
+function remainingCount() {
+  if (!state.list) return 0;
+  return Object.values(state.list.items).filter((it) => it && it.name && !it.checked).length;
+}
+function updateBadge() {
+  const n = remainingCount();
+  document.querySelectorAll("[data-badge]").forEach((b) => { b.textContent = n; b.hidden = n === 0; });
 }
 
-/** Er familien borte denne dagen? (planlagt i ukefilen eller markert på siden) */
-function isAway(day) {
-  if (!day.recipe) return true;
-  return !!state.store?.state.away?.[day.date];
-}
-
-function macroLine(n) {
-  if (!n) return "";
+function noFamilyHTML() {
   return `
-    <div class="macros" aria-label="Næringsinnhold per porsjon">
-      <div class="macro kcal"><b>${n.kcal}</b><span>kcal</span></div>
-      <div class="macro"><b>${n.protein} g</b><span>Protein</span></div>
-      <div class="macro"><b>${n.carbs} g</b><span>Karbo</span></div>
-      <div class="macro"><b>${n.fat} g</b><span>Fett</span></div>
-      ${n.fiber != null ? `<div class="macro"><b>${n.fiber} g</b><span>Fiber</span></div>` : ""}
-    </div>`;
-}
-
-function renderWeek(quiet = false) {
-  const w = state.week;
-  const today = todayISO();
-  const todayDay = w.days.find((d) => d.date === today && !isAway(d));
-  document.title = `Matplan – ${w.title}`;
-  const scrollY = window.scrollY;
-
-  const hero = todayDay ? (() => {
-    const r = w.recipes[todayDay.recipe];
-    return `
-      <a class="today" href="#/oppskrift/${esc(todayDay.recipe)}" style="--h:${r.hue ?? 30}">
-        <div class="today-emoji" aria-hidden="true">${r.emoji}</div>
-        <div>
-          <div class="today-label">I dag · ${esc(dayName(today))}</div>
-          <h2>${esc(r.title)}</h2>
-          <div class="today-meta"><span>⏱ ${formatTime(r.time)}</span>${r.nutrition ? `<span>🔥 ${r.nutrition.kcal} kcal</span>` : ""}<span>👨‍🍳 ${esc(r.difficulty)}</span></div>
-          <span class="today-cta">Se oppskrift →</span>
-        </div>
-      </a>` })() : "";
-
-  const cards = w.days.map((d) => {
-    const r = w.recipes[d.recipe];
-    const isToday = d.date === today;
-    const isPast = d.date < today;
-    const away = isAway(d);
-    const when = `<div class="day-when">${esc(dayName(d.date))} · ${esc(shortDate(d.date))} ${isToday ? '<span class="pill-today">I dag</span>' : ""}</div>`;
-    const toggle = r ? `<button class="away-btn ${away ? "on" : ""}" type="button" data-away="${esc(d.date)}" aria-pressed="${away}" aria-label="${away ? "Vi er hjemme likevel" : "Vi er borte denne dagen"}">${away ? "↩︎ Hjemme" : "🧳 Borte"}</button>` : "";
-    if (away) {
-      return `
-        <div class="day is-away ${isToday ? "is-today" : ""}" style="--h:210">
-          <div class="day-main">
-            <div class="day-emoji" aria-hidden="true">🧳</div>
-            <div>
-              ${when}
-              <h3>Borte – ingen middag</h3>
-              <p class="away-note">${r ? `Planlagt: ${esc(r.title)}. Ikke med på handlelisten.` : esc(d.note || "Ingen middag planlagt denne dagen.")}</p>
-            </div>
-          </div>
-          ${toggle}
-        </div>`;
-    }
-    return `
-      <div class="day ${isToday ? "is-today" : ""} ${isPast ? "is-past" : ""}" style="--h:${r.hue ?? 30}">
-        <a class="day-main" href="#/oppskrift/${esc(d.recipe)}">
-          <div class="day-emoji" aria-hidden="true">${r.emoji}</div>
-          <div>
-            ${when}
-            <h3>${esc(r.title)}</h3>
-            <div class="chips">
-              <span class="chip chip-accent">⏱ ${formatTime(r.time)}</span>
-              ${r.nutrition ? `<span class="chip">🔥 ${r.nutrition.kcal} kcal</span>` : ""}
-              ${(r.tags || []).slice(0, 1).map((t) => `<span class="chip">${esc(t)}</span>`).join("")}
-            </div>
-          </div>
-        </a>
-        ${toggle}
-      </div>`;
-  }).join("");
-
-  app.innerHTML = `
-    <section class="page ${quiet ? "no-anim" : ""}">
-      <div class="page-head">
-        <div>
-          <div class="eyebrow">${esc(rangeLabel(w.start, w.end))}</div>
-          <h1 class="page-title">${esc(w.title)}</h1>
-          ${w.intro ? `<p class="lead">${esc(w.intro)}</p>` : ""}
-        </div>
-        ${weekSelectHTML()}
-      </div>
-      ${hero}
-      <div class="days">${cards}</div>
-      <div class="week-summary">
-        <div>
-          <strong>Klar for å handle?</strong>
-          <p>Alt du trenger til de resterende middagene for ${state.servings} personer, sortert etter avdeling.</p>
-        </div>
-        <a class="btn btn-primary" href="#/handleliste">🛒 Åpne handlelisten</a>
+    <section class="page">
+      <div class="empty">
+        <div class="big">🏠</div>
+        <h2>Du er ikke med i en familie ennå</h2>
+        <p>${state.access.admin ? "Som administrator kan du opprette en familie og legge deg selv til." : "Be administrator om å legge deg til i en familie."}</p>
+        ${state.access.admin ? `<p style="margin-top:14px"><a class="btn btn-primary" href="#/admin">Gå til Admin</a></p>` : ""}
       </div>
     </section>`;
-  window.scrollTo(0, scrollY);
-
-  app.querySelector("#weekSelect")?.addEventListener("change", (e) => { location.hash = `#/uke/${e.target.value}`; });
-  app.querySelector(".days").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-away]"); if (!b) return;
-    const away = b.getAttribute("aria-pressed") !== "true";
-    state.store.setAway(b.dataset.away, away);
-    toast(away ? "Merket som borte – fjernet fra handlelisten" : "Middagen er tilbake på planen");
-  });
-}
-
-/* ---------------- Oppskrift ---------------- */
-function cookKey(id) { return `matplan:cook:${state.week.id}:${id}`; }
-
-function renderRecipe(id) {
-  const w = state.week;
-  const r = w.recipes[id];
-  if (!r) { app.innerHTML = `<section class="page"><div class="empty"><div class="big">🤔</div><p>Fant ikke oppskriften.</p><p><a class="btn" href="#/">Til ukeplanen</a></p></div></section>`; return; }
-
-  const idx = w.days.findIndex((d) => d.recipe === id);
-  const day = w.days[idx];
-  const withRecipe = (d) => d && d.recipe && w.recipes[d.recipe];
-  const prev = w.days.slice(0, Math.max(idx, 0)).reverse().find(withRecipe);
-  const next = w.days.slice(idx + 1).find(withRecipe);
-  const cook = storage.get(cookKey(id), { ing: [], steps: [] });
-  let servings = state.servings;
-  document.title = `${r.title} – Matplan`;
-
-  const ingredientRows = () => {
-    const f = servings / (w.baseServings || 4);
-    const main = r.ingredients.filter((i) => i.cat !== "basis");
-    const basis = r.ingredients.filter((i) => i.cat === "basis");
-    const row = (i) => {
-      const k = slug(i.name);
-      const amt = i.amount != null ? formatAmount(i.amount * f, i.unit || "stk") : "etter smak";
-      return `<li><label class="check-row">
-        <input type="checkbox" data-ing="${esc(k)}" ${cook.ing.includes(k) ? "checked" : ""}>
-        <span class="box" aria-hidden="true"></span>
-        <span class="label">${esc(i.name)}${i.note ? `<span class="note">${esc(i.note)}</span>` : ""}</span>
-        <span class="amount">${esc(amt)}</span>
-      </label></li>`;
-    };
-    return `<ul class="ingredients">${main.map(row).join("")}</ul>
-      ${basis.length ? `<div class="ing-sub">Krydder og basis</div><ul class="ingredients">${basis.map(row).join("")}</ul>` : ""}`;
-  };
-
-  const currentStep = () => r.steps.findIndex((_, i) => !cook.steps.includes(i));
-  const stepsHTML = () => {
-    const cur = currentStep();
-    return r.steps.map((s, i) => `
-      <li class="step ${cook.steps.includes(i) ? "done" : ""} ${i === cur ? "current" : ""}" data-step="${i}" role="button" tabindex="0" aria-pressed="${cook.steps.includes(i)}">
-        <div class="step-num"><span>${i + 1}</span></div>
-        <div><h3>${esc(s.title)}</h3><p>${esc(s.text)}</p></div>
-      </li>`).join("");
-  };
-
-  const navLink = (d, dir) => {
-    if (!d) return "<span></span>";
-    const rr = w.recipes[d.recipe];
-    return `<a class="btn ${dir}" href="#/oppskrift/${esc(d.recipe)}">${dir === "prev" ? "← " : ""}${esc(dayName(d.date))}: ${esc(rr.title.split(" med ")[0])}${dir === "next" ? " →" : ""}</a>`;
-  };
-
-  app.innerHTML = `
-    <article class="page">
-      <a class="back" href="#/">← Ukeplan</a>
-      <header class="recipe-hero" style="--h:${r.hue ?? 30}">
-        <div class="hero-top">
-          <div class="hero-emoji" aria-hidden="true">${r.emoji}</div>
-          <div>
-            ${day ? `<div class="day-label">${esc(dayName(day.date))} · ${esc(shortDate(day.date))}</div>` : ""}
-            <h1>${esc(r.title)}</h1>
-          </div>
-        </div>
-        <p>${esc(r.description)}</p>
-        <div class="hero-stats">
-          <span class="hero-stat">⏱ <b>${formatTime(r.time)}</b>${r.activeTime ? ` (aktiv ${formatTime(r.activeTime)})` : ""}</span>
-          <span class="hero-stat">👨‍🍳 ${esc(r.difficulty)}</span>
-          ${(r.tags || []).map((t) => `<span class="hero-stat">${esc(t)}</span>`).join("")}
-        </div>
-      </header>
-      ${r.nutrition ? `<section class="panel macro-panel" aria-labelledby="macroTitle">
-        <div class="panel-head"><h2 id="macroTitle">Næring per porsjon</h2><span class="muted">ca.-verdier</span></div>
-        ${macroLine(r.nutrition)}
-      </section>` : ""}
-
-      <div class="recipe-layout">
-        <section class="panel panel-ingredients" aria-labelledby="ingTitle">
-          <div class="panel-head">
-            <h2 id="ingTitle">Ingredienser</h2>
-            <div class="stepper" role="group" aria-label="Antall porsjoner">
-              <button type="button" data-serv="-1" aria-label="Færre porsjoner">−</button>
-              <output id="servOut" aria-live="polite">${servings} pers.</output>
-              <button type="button" data-serv="1" aria-label="Flere porsjoner">+</button>
-            </div>
-          </div>
-          <div id="ingList">${ingredientRows()}</div>
-        </section>
-
-        <section class="panel" aria-labelledby="stepTitle">
-          <div class="panel-head"><h2 id="stepTitle">Fremgangsmåte</h2></div>
-          <div class="cook-bar">
-            ${"wakeLock" in navigator ? `<button class="btn btn-sm" type="button" id="wakeBtn">🔆 Hold skjermen på</button>` : ""}
-            <button class="btn btn-sm btn-ghost" type="button" id="resetCook">Nullstill</button>
-            <span class="hint">Trykk på et steg når det er gjort.</span>
-          </div>
-          <ol class="steps" id="steps">${stepsHTML()}</ol>
-
-          <div class="notes">
-            ${r.portions ? `<div class="note-card note-portions"><h3>⚖️ Porsjonstips</h3><p>${esc(r.portions)}</p></div>` : ""}
-            ${r.health ? `<div class="note-card note-health"><h3>💚 Hvorfor sunt</h3><p>${esc(r.health)}</p></div>` : ""}
-            ${r.kids ? `<div class="note-card note-kids"><h3>🧒 Barnetips</h3><p>${esc(r.kids)}</p></div>` : ""}
-            ${r.tips?.length ? `<div class="note-card note-tips"><h3>💡 Tips</h3><ul>${r.tips.map((t) => `<li>${esc(t)}</li>`).join("")}</ul></div>` : ""}
-          </div>
-        </section>
-      </div>
-
-      <nav class="recipe-nav" aria-label="Andre dager">${navLink(prev, "prev")}${navLink(next, "next")}</nav>
-    </article>`;
-
-  const saveCook = () => storage.set(cookKey(id), cook);
-  const ingList = app.querySelector("#ingList");
-  const stepsEl = app.querySelector("#steps");
-
-  app.querySelectorAll("[data-serv]").forEach((b) => b.addEventListener("click", () => {
-    servings = Math.min(12, Math.max(1, servings + Number(b.dataset.serv)));
-    app.querySelector("#servOut").textContent = `${servings} pers.`;
-    ingList.innerHTML = ingredientRows();
-  }));
-  ingList.addEventListener("change", (e) => {
-    const k = e.target.dataset.ing; if (!k) return;
-    cook.ing = e.target.checked ? [...new Set([...cook.ing, k])] : cook.ing.filter((x) => x !== k);
-    saveCook();
-  });
-  const toggleStep = (el) => {
-    const i = Number(el.dataset.step);
-    cook.steps = cook.steps.includes(i) ? cook.steps.filter((x) => x !== i) : [...cook.steps, i];
-    saveCook();
-    stepsEl.innerHTML = stepsHTML();
-    stepsEl.querySelector(".current")?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-  };
-  stepsEl.addEventListener("click", (e) => { const el = e.target.closest("[data-step]"); if (el) toggleStep(el); });
-  stepsEl.addEventListener("keydown", (e) => {
-    const el = e.target.closest("[data-step]");
-    if (el && (e.key === "Enter" || e.key === " ")) { e.preventDefault(); toggleStep(el); }
-  });
-  app.querySelector("#resetCook").addEventListener("click", () => {
-    cook.ing = []; cook.steps = []; saveCook();
-    ingList.innerHTML = ingredientRows(); stepsEl.innerHTML = stepsHTML();
-  });
-  app.querySelector("#wakeBtn")?.addEventListener("click", async (e) => {
-    const btn = e.currentTarget;
-    if (state.wakeLock) { releaseWakeLock(); return; }
-    try {
-      state.wakeLock = await navigator.wakeLock.request("screen");
-      btn.classList.add("on"); btn.textContent = "🔆 Skjermen holdes på";
-      state.wakeLock.addEventListener("release", () => { state.wakeLock = null; btn.classList.remove("on"); btn.textContent = "🔆 Hold skjermen på"; });
-    } catch { toast("Kunne ikke holde skjermen på"); }
-  });
-}
-
-function releaseWakeLock() { state.wakeLock?.release().catch(() => {}); state.wakeLock = null; }
-
-/* ---------------- Handleliste ---------------- */
-/** Dager som har vært er ikke med som standard; familien kan overstyre per dag. */
-function isDayIncluded(date) {
-  const day = state.week?.days.find((d) => d.date === date);
-  if (!day || isAway(day)) return false;
-  const override = state.store?.state.days?.[date];
-  if (typeof override === "boolean") return override;
-  return date >= todayISO();
-}
-const shoppingGroups = () => buildShoppingList(state.week, state.servings, isDayIncluded);
-
-function listCounts() {
-  if (!state.week || !state.store) return { total: 0, done: 0 };
-  const groups = shoppingGroups().filter((g) => !g.pantry);
-  const st = state.store.state;
-  let total = 0, done = 0;
-  for (const g of groups) for (const it of g.items) { total++; if (st.checked[it.key]) done++; }
-  for (const c of Object.values(st.custom)) { if (!c?.name) continue; total++; if (c.checked) done++; }
-  return { total, done };
-}
-
-function updateBadge() {
-  const { total, done } = listCounts();
-  const left = total - done;
-  document.querySelectorAll("[data-badge]").forEach((b) => { b.textContent = left; b.hidden = left <= 0; });
 }
 
 function renderList() {
-  const w = state.week;
-  document.title = `Handleliste – ${w.title}`;
+  document.title = "Handleliste – Istrefi Shopping";
+  if (!state.access.family) { app.innerHTML = noFamilyHTML(); return; }
   app.innerHTML = `
-    <section class="page">
-      <div class="page-head">
+    <section class="page list-page">
+      <div class="list-head">
         <div>
-          <div class="eyebrow">${esc(w.title)} · ${esc(rangeLabel(w.start, w.end))}</div>
+          <div class="eyebrow">${esc(state.access.familyName || "Familien")}</div>
           <h1 class="page-title">Handleliste</h1>
-          <p class="lead">Mengder for <strong>${state.servings} personer</strong>, sortert etter avdelingene på Rema 1000.</p>
         </div>
-        ${weekSelectHTML()}
-      </div>
-      <div class="day-picker" id="dayPicker"></div>
-      <div class="progress-wrap" id="progress"></div>
-      <form class="add-form" id="addForm" autocomplete="off">
-        <label class="visually-hidden" for="addInput">Legg til vare</label>
-        <input id="addInput" type="text" placeholder="Legg til egen vare, f.eks. melk" enterkeyhint="done" maxlength="80">
-        <button class="btn btn-primary" type="submit" aria-label="Legg til">＋</button>
-      </form>
-      <div class="list-tools">
-        <button class="btn btn-sm ${state.hideChecked ? "on" : ""}" type="button" id="hideBtn">${state.hideChecked ? "Vis avhuket" : "Skjul avhuket"}</button>
-        <button class="btn btn-sm btn-ghost" type="button" id="resetBtn">Nullstill</button>
         <span class="sync-state" id="syncState"></span>
       </div>
+      <form class="add-form sticky-add" id="addForm" autocomplete="off">
+        <label class="visually-hidden" for="addInput">Legg til vare</label>
+        <input id="addInput" type="text" placeholder="Legg til vare …" enterkeyhint="done" maxlength="80" autocapitalize="sentences">
+        <button class="btn btn-primary add-btn" type="submit" aria-label="Legg til">＋</button>
+      </form>
       <div id="listBody"></div>
     </section>`;
 
-  app.querySelector("#weekSelect")?.addEventListener("change", async (e) => {
-    await selectWeek(e.target.value); renderList();
-  });
+  const input = app.querySelector("#addInput");
   app.querySelector("#addForm").addEventListener("submit", (e) => {
     e.preventDefault();
-    const input = app.querySelector("#addInput");
-    const name = input.value.trim();
-    if (!name) return;
-    state.store.addCustom(name);
+    const res = state.list.add(input.value);
+    if (res?.duplicate) toast("Står allerede på listen");
     input.value = "";
     input.focus();
-  });
-  app.querySelector("#hideBtn").addEventListener("click", (e) => {
-    state.hideChecked = !state.hideChecked;
-    storage.set("matplan:hideChecked", state.hideChecked);
-    e.currentTarget.classList.toggle("on", state.hideChecked);
-    e.currentTarget.textContent = state.hideChecked ? "Vis avhuket" : "Skjul avhuket";
-    renderListBody();
-  });
-  app.querySelector("#resetBtn").addEventListener("click", () => {
-    if (confirm("Fjerne alle avhukinger (og egne varer som er huket av)?\nDette gjelder for hele familien.")) state.store.reset();
-  });
-
-  app.querySelector("#dayPicker").addEventListener("click", (e) => {
-    const b = e.target.closest("[data-day]"); if (!b || b.disabled) return;
-    const date = b.dataset.day;
-    if (state.store.state.away?.[date]) { state.store.patch({ [`away/${date}`]: null, [`days/${date}`]: true }); return; }
-    state.store.setDay(date, !isDayIncluded(date));
   });
 
   const body = app.querySelector("#listBody");
   body.addEventListener("change", (e) => {
-    const t = e.target;
-    if (t.dataset.key) state.store.setChecked(t.dataset.key, t.checked);
-    if (t.dataset.custom) state.store.setCustomChecked(t.dataset.custom, t.checked);
-    if (t.checked && navigator.vibrate) navigator.vibrate(8);
+    const id = e.target.dataset.check; if (!id) return;
+    state.list.setChecked(id, e.target.checked);
+    if (e.target.checked && navigator.vibrate) navigator.vibrate(8);
   });
   body.addEventListener("click", (e) => {
-    const rm = e.target.closest("[data-remove]");
-    if (rm) state.store.removeCustom(rm.dataset.remove);
+    const ed = e.target.closest("[data-edit]");
+    if (ed) { openEdit(ed.dataset.edit); return; }
+    if (e.target.closest("#clearBtn")) {
+      const removed = Object.entries(state.list.items).filter(([, it]) => it.checked).map(([id, it]) => [id, { ...it }]);
+      const n = state.list.clearChecked();
+      if (n) toast(`${n} ${n === 1 ? "vare" : "varer"} fjernet`, { label: "Angre", fn: () => state.list.restore(removed) });
+    }
+    if (e.target.closest("#hideBtn")) {
+      state.hideChecked = !state.hideChecked;
+      storage.set("shop:hideChecked", state.hideChecked);
+      renderListBody();
+    }
   });
-  body.addEventListener("toggle", (e) => {
-    const d = e.target; if (!d.dataset?.group) return;
-    if (d.open) state.closedGroups.delete(d.dataset.group); else state.closedGroups.add(d.dataset.group);
-    storage.set("matplan:closedGroups", [...state.closedGroups]);
-  }, true);
-
   renderListBody();
 }
 
 function renderListBody() {
   const body = app.querySelector("#listBody");
-  if (!body) return;
-  const st = state.store.state;
-  const groups = shoppingGroups();
+  if (!body || !state.list) return;
 
-  // Dagvelger
-  const today = todayISO();
-  const included = state.week.days.filter((d) => isDayIncluded(d.date));
-  app.querySelector("#dayPicker").innerHTML = `
-    <div class="day-picker-head"><strong>Handler til</strong><span class="muted">${included.length} av ${state.week.days.length} middager</span></div>
-    <div class="day-chips">${state.week.days.map((d) => {
-      const on = isDayIncluded(d.date);
-      const away = isAway(d);
-      const r = state.week.recipes[d.recipe];
-      return `<button type="button" class="day-chip ${on ? "on" : ""} ${d.date < today ? "past" : ""} ${away ? "away" : ""}" data-day="${esc(d.date)}" aria-pressed="${on}" title="${esc(away ? "Borte" : r?.title || "")}" ${!d.recipe ? "disabled" : ""}>
-        <span class="dc-name">${esc(dayName(d.date).slice(0, 3))}</span><span class="dc-emoji" aria-hidden="true">${away ? "🧳" : r?.emoji || ""}</span></button>`;
-    }).join("")}</div>
-    ${state.week.days.some((d) => d.date < today || isAway(d)) ? `<p class="muted day-hint">Dager som har vært og dager dere er borte (🧳) er tatt bort. Trykk på en dag for å ta den med eller fjerne den.</p>` : ""}`;
-
-  // Fremdrift
-  const { total, done } = listCounts();
-  const pct = total ? Math.round((done / total) * 100) : 0;
-  app.querySelector("#progress").innerHTML = `
-    <div class="progress-top"><span><b>${done}</b> av ${total} varer i kurven</span><span>${pct === 100 ? "🎉 Ferdig!" : `${pct} %`}</span></div>
-    <div class="progress" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><span style="width:${pct}%"></span></div>`;
-
-  // Synk-status
-  const s = state.store.status;
+  const s = state.list.status;
   const sync = app.querySelector("#syncState");
-  const labels = { connecting: "Kobler til …", online: "Delt med familien", offline: "Frakoblet – synker senere" };
+  const labels = { connecting: "Kobler til …", online: "Synkronisert", offline: "Frakoblet – synker senere" };
   sync.className = `sync-state ${s}`;
   sync.innerHTML = `<span class="sync-dot"></span>${labels[s]}`;
 
-  const row = (it) => {
-    const checked = !!st.checked[it.key];
-    const amount = it.amounts.map(([u, v]) => formatAmount(v, u, true)).join(" + ");
-    return `<li class="${checked ? "is-checked" : ""}"><label class="check-row">
-      <input type="checkbox" data-key="${esc(it.key)}" ${checked ? "checked" : ""}>
-      <span class="box" aria-hidden="true"></span>
-      <span class="label">${esc(it.name)}<span class="used-in">${esc(it.days.join(", "))}</span></span>
-      <span class="amount">${esc(amount)}</span>
-    </label></li>`;
-  };
+  const entries = Object.entries(state.list.items).filter(([, it]) => it && it.name);
+  const open = entries.filter(([, it]) => !it.checked);
+  const done = entries.filter(([, it]) => it.checked).sort((a, b) => (b[1].ct || 0) - (a[1].ct || 0));
 
-  const customs = Object.entries(st.custom).filter(([, c]) => c && c.name).sort((a, b) => (a[1].t || 0) - (b[1].t || 0));
-  const customGroup = customs.length ? `
-    <section class="shop-group ${state.hideChecked ? "hide-checked" : ""}">
-      <div class="group-head"><span class="group-icon">📝</span>Egne varer<span class="group-count ${customs.every(([, c]) => c.checked) ? "complete" : ""}">${customs.filter(([, c]) => c.checked).length}/${customs.length}</span></div>
-      <ul>${customs.map(([id, c]) => `<li class="${c.checked ? "is-checked" : ""}"><label class="check-row">
-        <input type="checkbox" data-custom="${esc(id)}" ${c.checked ? "checked" : ""}>
-        <span class="box" aria-hidden="true"></span>
-        <span class="label">${esc(c.name)}</span>
-        <button class="remove-btn" type="button" data-remove="${esc(id)}" aria-label="Fjern ${esc(c.name)}">✕</button>
-      </label></li>`).join("")}</ul>
-    </section>` : "";
+  if (!entries.length) {
+    body.innerHTML = `<div class="empty"><div class="big">🛒</div><h2>Listen er tom</h2><p>Skriv inn en vare over – den sorteres automatisk etter avdeling.</p></div>`;
+    return;
+  }
 
-  const groupHTML = groups.map((g) => {
-    const n = g.items.filter((it) => st.checked[it.key]).length;
-    const open = !state.closedGroups.has(g.id);
-    return `
-      <details class="shop-group ${state.hideChecked ? "hide-checked" : ""}" data-group="${esc(g.id)}" ${open ? "open" : ""}>
-        <summary><span class="group-icon" aria-hidden="true">${g.icon}</span>${esc(g.name)}<span class="group-count ${n === g.items.length ? "complete" : ""}">${n}/${g.items.length}</span></summary>
-        ${g.pantry ? `<p class="group-hint">Det meste har dere sikkert hjemme. Huk av det du har, eller kjøp det som mangler.</p>` : ""}
-        <ul>${g.items.map(row).join("")}</ul>
-      </details>`;
-  }).join("");
+  const row = ([id, it]) => `
+    <li class="item ${it.checked ? "is-checked" : ""}">
+      <label class="check-hit">
+        <input type="checkbox" data-check="${esc(id)}" ${it.checked ? "checked" : ""} aria-label="${esc(it.name)}">
+        <span class="box round" aria-hidden="true"></span>
+      </label>
+      <button class="item-name" type="button" data-edit="${esc(id)}">${esc(it.name)}</button>
+    </li>`;
 
-  body.innerHTML = groups.length || customs.length
-    ? `<div class="shop-grid">${customGroup}${groupHTML}</div>`
-    : `<div class="empty"><div class="big">🧺</div><p>Ingen dager er valgt. Trykk på en dag over for å ta den med.</p></div>`;
+  const groups = CATEGORIES.map((c) => ({ ...c, items: open.filter(([, it]) => (CAT_BY_ID[it.cat] ? it.cat : "annet") === c.id) }))
+    .filter((g) => g.items.length);
+  for (const g of groups) g.items.sort((a, b) => a[1].name.localeCompare(b[1].name, "nb"));
+
+  body.innerHTML = `
+    ${open.length ? `<p class="list-count"><b>${open.length}</b> ${open.length === 1 ? "vare" : "varer"} igjen</p>` : `<div class="all-done">🎉 Alt er i kurven!</div>`}
+    <div class="groups">
+      ${groups.map((g) => `
+        <section class="group">
+          <h2 class="group-head"><span aria-hidden="true">${g.icon}</span>${esc(g.name)}<span class="group-count">${g.items.length}</span></h2>
+          <ul class="items">${g.items.map(row).join("")}</ul>
+        </section>`).join("")}
+    </div>
+    ${done.length ? `
+      <section class="group basket">
+        <div class="basket-head">
+          <h2 class="group-head"><span aria-hidden="true">🧺</span>I kurven<span class="group-count">${done.length}</span></h2>
+          <div class="row">
+            <button class="btn btn-sm btn-ghost" type="button" id="hideBtn">${state.hideChecked ? "Vis" : "Skjul"}</button>
+            <button class="btn btn-sm" type="button" id="clearBtn">Fjern avhukede</button>
+          </div>
+        </div>
+        ${state.hideChecked ? "" : `<ul class="items">${done.map(row).join("")}</ul>`}
+      </section>` : ""}`;
 }
 
-/* ---------------- Innstillinger ---------------- */
+/* ---------- Rediger vare ---------- */
+function openEdit(id) {
+  const it = state.list?.items[id]; if (!it) return;
+  let cat = CAT_BY_ID[it.cat] ? it.cat : "annet";
+  editDialog.innerHTML = `
+    <form class="sheet-body" id="editForm">
+      <div class="sheet-head"><h2 id="editTitle">Rediger vare</h2><button class="btn btn-sm btn-ghost" type="button" data-close>Avbryt</button></div>
+      <label class="field"><span>Navn</span><input id="editName" type="text" maxlength="80" value="${esc(it.name)}"></label>
+      <div class="field"><span>Avdeling</span>
+        <div class="cat-grid" role="radiogroup" aria-label="Avdeling">
+          ${CATEGORIES.map((c) => `<button type="button" class="cat-btn ${c.id === cat ? "on" : ""}" data-cat="${esc(c.id)}" role="radio" aria-checked="${c.id === cat}"><span aria-hidden="true">${c.icon}</span>${esc(c.name)}</button>`).join("")}
+        </div>
+        <small class="muted">Appen husker avdelingen neste gang dere legger til denne varen.</small>
+      </div>
+      <div class="row space">
+        <button class="btn btn-ghost danger" type="button" id="deleteItem">🗑 Slett</button>
+        <button class="btn btn-primary" type="submit">Lagre</button>
+      </div>
+    </form>`;
+  const q = (s) => editDialog.querySelector(s);
+  editDialog.querySelectorAll("[data-cat]").forEach((b) => b.addEventListener("click", () => {
+    cat = b.dataset.cat;
+    editDialog.querySelectorAll("[data-cat]").forEach((x) => { x.classList.toggle("on", x === b); x.setAttribute("aria-checked", x === b); });
+  }));
+  q("[data-close]").addEventListener("click", () => editDialog.close());
+  q("#deleteItem").addEventListener("click", () => {
+    const copy = { ...it };
+    state.list.remove(id); editDialog.close();
+    toast(`«${it.name}» slettet`, { label: "Angre", fn: () => state.list.restore([[id, copy]]) });
+  });
+  q("#editForm").addEventListener("submit", (e) => {
+    e.preventDefault();
+    state.list.edit(id, { name: q("#editName").value, cat });
+    editDialog.close();
+  });
+  editDialog.showModal();
+}
+editDialog.addEventListener("click", (e) => { if (e.target === editDialog) editDialog.close(); });
+
+/* ================= Familie ================= */
+function inviteMailto(invite) {
+  const link = inviteLink(invite.id);
+  const subject = "Invitasjon til Istrefi Shopping";
+  const body = `Hei!\n\nDu er invitert til ${invite.familyName ? `«${invite.familyName}» i ` : ""}Istrefi Shopping – vår felles handleliste.\n\nTrykk på lenken for å lage konto:\n${link}\n\nLenken gjelder i 14 dager.\n`;
+  return `mailto:${encodeURIComponent(invite.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+}
+
+async function shareInvite(invite) {
+  const url = inviteLink(invite.id);
+  if (navigator.share) {
+    try { await navigator.share({ title: "Invitasjon til Istrefi Shopping", text: "Du er invitert til handlelisten vår:", url }); } catch { /* avbrutt */ }
+  } else {
+    try { await navigator.clipboard.writeText(url); toast("Lenke kopiert"); } catch { prompt("Kopier lenken:", url); }
+  }
+}
+
+function inviteReadyHTML(inv) {
+  return `
+    <div class="invite-ready">
+      <p><strong>Invitasjon klar for ${esc(inv.email)}</strong></p>
+      <div class="row">
+        <a class="btn btn-primary btn-sm" href="${esc(inviteMailto(inv))}">📧 Send på e-post</a>
+        <button class="btn btn-sm" type="button" data-share-new>📤 Del lenke</button>
+      </div>
+    </div>`;
+}
+
+const validEmail = (s) => /^\S+@\S+\.\S+$/.test(s);
+const roleLabel = (r) => (r === "owner" ? "👑 Ansvarlig" : "Medlem");
+const adminItem = (title, sub, actions) => `<li class="admin-item"><div><strong>${esc(title)}</strong><span class="muted">${esc(sub)}</span></div><div class="row">${actions}</div></li>`;
+const actBtn = (act, d, label, cls = "", extra = "") => `<button class="btn btn-sm ${cls}" type="button" data-act="${act}" data-id="${esc(d.id)}" data-email="${esc(d.email || "")}" ${extra}>${label}</button>`;
+
+function renderFamily() {
+  document.title = "Familie – Istrefi Shopping";
+  const a = state.access;
+  if (!a.family) { app.innerHTML = noFamilyHTML(); return; }
+  const canManage = a.role === "owner" || a.admin;
+  app.innerHTML = `
+    <section class="page">
+      <div class="page-head"><div>
+        <div class="eyebrow">Din familie</div>
+        <h1 class="page-title">${esc(a.familyName || "Familien")}</h1>
+        <p class="lead">${canManage ? "Du kan invitere og fjerne medlemmer i familien." : "Alle her deler den samme handlelisten."}</p>
+      </div></div>
+      <div class="admin-grid">
+        ${canManage ? `<section class="panel">
+          <h2>✉️ Inviter til familien</h2>
+          <p class="muted">De får en lenke for å lage konto og kommer rett inn i ${esc(a.familyName || "familien")}.</p>
+          <form class="add-form" id="famInviteForm" autocomplete="off">
+            <label class="visually-hidden" for="famInviteEmail">E-post</label>
+            <input id="famInviteEmail" type="email" inputmode="email" autocapitalize="off" placeholder="navn@eksempel.no" required>
+            <button class="btn btn-primary" type="submit">Lag</button>
+          </form>
+          <div id="famNewInvite"></div>
+        </section>` : ""}
+        <div id="famLists" class="stack"><div class="loading"><div class="spinner"></div></div></div>
+      </div>
+    </section>`;
+
+  app.querySelector("#famInviteForm")?.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const input = app.querySelector("#famInviteEmail");
+    if (!validEmail(input.value.trim())) { toast("Skriv inn en gyldig e-postadresse"); return; }
+    try {
+      const inv = await createInvite({ email: input.value, family: a.family, familyName: a.familyName, role: "member" }, getUser());
+      input.value = "";
+      const box = app.querySelector("#famNewInvite");
+      box.innerHTML = inviteReadyHTML(inv);
+      box.querySelector("[data-share-new]").addEventListener("click", () => shareInvite(inv));
+      loadFamilyLists();
+    } catch (err) { toast(errorText(err)); }
+  });
+
+  app.querySelector("#famLists").addEventListener("click", async (e) => {
+    const b = e.target.closest("button[data-act]"); if (!b) return;
+    const { act, id, email } = b.dataset;
+    try {
+      if (act === "remove" && confirm(`Fjerne ${email} fra familien? De mister tilgangen til handlelisten.`)) { await removeMember(id, a.family); toast(`${email} er fjernet`); }
+      if (act === "share") await shareInvite({ id, email });
+      if (act === "delinv" && confirm(`Slette invitasjonen til ${email}?`)) await deleteInvite(id);
+      loadFamilyLists();
+    } catch (err) { toast(errorText(err)); }
+  });
+
+  loadFamilyLists();
+}
+
+async function loadFamilyLists() {
+  const box = app.querySelector("#famLists"); if (!box) return;
+  const a = state.access;
+  const canManage = a.role === "owner" || a.admin;
+  const me = getUser()?.uid;
+  let members = [], invites = [];
+  try {
+    members = await familyMembers(a.family);
+    if (a.admin) invites = (await loadAdminData()).invites.filter((i) => i.family === a.family);
+    else if (a.role === "owner") invites = await familyInvites(a.family);
+  } catch (err) { box.innerHTML = `<p class="muted">${esc(errorText(err))}</p>`; return; }
+  box.innerHTML = `
+    <section class="panel">
+      <h2>👨‍👩‍👧 Medlemmer <span class="group-count">${members.length}</span></h2>
+      <ul class="admin-list">${members.map((m) => adminItem(m.email + (m.id === me ? " (deg)" : ""), roleLabel(m.role),
+        canManage && m.id !== me ? actBtn("remove", m, "Fjern", "btn-ghost") : "")).join("")}</ul>
+    </section>
+    ${canManage ? `<section class="panel">
+      <h2>📨 Sendte invitasjoner <span class="group-count">${invites.length}</span></h2>
+      ${invites.length ? `<ul class="admin-list">${invites.map((i) => adminItem(i.email, i.expires < Date.now() ? "Utløpt" : `Gjelder til ${fmtDate(i.expires)}`,
+        `<a class="btn btn-sm" href="${esc(inviteMailto(i))}" aria-label="Send på nytt">📧</a>` + actBtn("share", i, "📤") + actBtn("delinv", i, "Slett", "btn-ghost"))).join("")}</ul>` : `<p class="muted">Ingen ubrukte invitasjoner.</p>`}
+    </section>` : ""}`;
+}
+
+/* ================= Admin ================= */
+let adminCache = null;
+
+function renderAdmin() {
+  document.title = "Admin – Istrefi Shopping";
+  app.innerHTML = `
+    <section class="page">
+      <div class="page-head"><div>
+        <div class="eyebrow">Kun for administrator</div>
+        <h1 class="page-title">Familier</h1>
+        <p class="lead">Opprett familier, plasser nye brukere og styr hvem som er med hvor. Du ser ikke andre familiers handlelister.</p>
+      </div></div>
+      <div class="admin-grid">
+        <div class="stack">
+          <section class="panel">
+            <h2>➕ Ny familie</h2>
+            <form class="add-form" id="newFamilyForm" autocomplete="off">
+              <label class="visually-hidden" for="newFamilyName">Navn på familien</label>
+              <input id="newFamilyName" type="text" placeholder="F.eks. Familien Istrefi" maxlength="40" required>
+              <button class="btn btn-primary" type="submit">Opprett</button>
+            </form>
+          </section>
+          <section class="panel">
+            <h2>✉️ Inviter</h2>
+            <form class="invite-form" id="adminInviteForm" autocomplete="off">
+              <input id="adminInviteEmail" type="email" inputmode="email" autocapitalize="off" placeholder="navn@eksempel.no" required aria-label="E-post">
+              <select id="adminInviteFamily" aria-label="Familie"></select>
+              <select id="adminInviteRole" aria-label="Rolle"><option value="member">Medlem</option><option value="owner">Familieansvarlig</option></select>
+              <button class="btn btn-primary" type="submit">Lag invitasjon</button>
+            </form>
+            <div id="adminNewInvite"></div>
+          </section>
+        </div>
+        <div id="adminLists" class="stack"><div class="loading"><div class="spinner"></div></div></div>
+      </div>
+    </section>`;
+
+  app.querySelector("#newFamilyForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const input = app.querySelector("#newFamilyName");
+    const name = input.value.trim(); if (!name) return;
+    try { await createFamily(name); toast(`«${name}» er opprettet`); input.value = ""; loadAdminLists(); }
+    catch (err) { toast(errorText(err)); }
+  });
+
+  app.querySelector("#adminInviteForm").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = app.querySelector("#adminInviteEmail");
+    const fid = app.querySelector("#adminInviteFamily").value;
+    const role = app.querySelector("#adminInviteRole").value;
+    if (!validEmail(email.value.trim())) { toast("Skriv inn en gyldig e-postadresse"); return; }
+    if (!fid) { toast("Opprett en familie først"); return; }
+    const fam = adminCache?.families.find((f) => f.id === fid);
+    try {
+      const inv = await createInvite({ email: email.value, family: fid, familyName: fam?.name, role }, getUser());
+      email.value = "";
+      const box = app.querySelector("#adminNewInvite");
+      box.innerHTML = inviteReadyHTML(inv);
+      box.querySelector("[data-share-new]").addEventListener("click", () => shareInvite(inv));
+      loadAdminLists();
+    } catch (err) { toast(errorText(err)); }
+  });
+
+  app.querySelector("#adminLists").addEventListener("click", onAdminAction);
+  loadAdminLists();
+}
+
+async function onAdminAction(e) {
+  const b = e.target.closest("button[data-act]"); if (!b) return;
+  const { act, id, email, fid } = b.dataset;
+  const me = getUser();
+  const fam = adminCache?.families.find((f) => f.id === fid);
+  const user = fam?.members.find((m) => m.id === id);
+  try {
+    if (act === "approve") {
+      const li = b.closest("li");
+      const target = li.querySelector("select[data-fam]").value;
+      const role = li.querySelector("select[data-role]").value;
+      if (!target) { toast("Opprett en familie først"); return; }
+      await placeUser(id, email, target, role);
+      toast(`${email} er lagt til`);
+    }
+    if (act === "deny" && confirm(`Avslå ${email}?`)) await denyRequest(id);
+    if (act === "addme") { await placeUser(me.uid, me.email, fid, "owner", state.access.family); await refreshAccess(); toast("Du er lagt til i familien"); }
+    if (act === "owner") await setRole(id, fid, user?.role === "owner" ? "member" : "owner");
+    if (act === "move") {
+      const target = b.closest("li").querySelector("select[data-move]").value;
+      if (target && target !== fid) {
+        await placeUser(id, email, target, "member", fid);
+        toast(`${email} er flyttet`);
+        if (id === me.uid) await refreshAccess();
+      }
+    }
+    if (act === "remove" && confirm(`Fjerne ${email} fra «${fam?.name}»? Kontoen må plasseres på nytt for å få tilgang.`)) {
+      await removeMember(id, fid);
+      if (id === me.uid) await refreshAccess();
+    }
+    if (act === "rename") {
+      const name = prompt("Nytt navn på familien:", fam?.name || "");
+      if (name && name.trim()) { await renameFamily(fid, name); if (fid === state.access.family) await refreshAccess(); }
+    }
+    if (act === "delfam" && confirm(`Slette «${fam?.name}» og handlelisten deres? Medlemmene (${fam?.members.length || 0}) må plasseres på nytt.`)) {
+      await deleteFamily(fid, fam?.members || []);
+      if (fid === state.access.family) await refreshAccess();
+      toast("Familien er slettet");
+    }
+    if (act === "share") await shareInvite({ id, email });
+    if (act === "delinv" && confirm(`Slette invitasjonen til ${email}?`)) await deleteInvite(id);
+    loadAdminLists();
+  } catch (err) { toast(errorText(err)); }
+}
+
+async function loadAdminLists() {
+  const box = app.querySelector("#adminLists"); if (!box) return;
+  try { adminCache = await loadAdminData(); } catch (err) { box.innerHTML = `<p class="muted">${esc(errorText(err))}</p>`; return; }
+  const { families, invites, requests } = adminCache;
+  const me = getUser()?.uid;
+  const famOptions = (sel) => families.map((f) => `<option value="${esc(f.id)}" ${f.id === sel ? "selected" : ""}>${esc(f.name)}</option>`).join("");
+
+  const sel = app.querySelector("#adminInviteFamily");
+  if (sel) sel.innerHTML = families.length ? famOptions(state.access.family) : `<option value="">Ingen familier ennå</option>`;
+
+  const famName = (fid) => families.find((f) => f.id === fid)?.name || "Slettet familie";
+  box.innerHTML = `
+    ${requests.length ? `<section class="panel highlight">
+      <h2>🙋 Venter på plass <span class="group-count">${requests.length}</span></h2>
+      <ul class="admin-list">${requests.map((r) => `
+        <li class="admin-item wrap">
+          <div><strong>${esc(r.email)}</strong><span class="muted">Registrert ${fmtDate(r.at)}</span></div>
+          <div class="row">
+            <select data-fam aria-label="Familie">${families.length ? famOptions() : `<option value="">Ingen familier</option>`}</select>
+            <select data-role aria-label="Rolle"><option value="member">Medlem</option><option value="owner">Ansvarlig</option></select>
+            ${actBtn("approve", r, "Legg til", "btn-primary")}${actBtn("deny", r, "Avslå", "btn-ghost")}
+          </div>
+        </li>`).join("")}</ul>
+    </section>` : ""}
+
+    ${families.length ? families.map((f) => `
+      <section class="panel family-card">
+        <div class="family-head">
+          <h2>🏠 ${esc(f.name)} <span class="group-count">${f.members.length}</span></h2>
+          <div class="row">
+            ${f.members.some((m) => m.id === me) ? `<span class="pill">Din familie</span>` : `<button class="btn btn-sm" type="button" data-act="addme" data-fid="${esc(f.id)}">Legg meg til</button>`}
+            <button class="btn btn-sm btn-ghost" type="button" data-act="rename" data-fid="${esc(f.id)}" aria-label="Gi nytt navn">✏️</button>
+            <button class="btn btn-sm btn-ghost" type="button" data-act="delfam" data-fid="${esc(f.id)}" aria-label="Slett familie">🗑</button>
+          </div>
+        </div>
+        ${f.members.length ? `<ul class="admin-list">${f.members.map((m) => `
+          <li class="admin-item wrap">
+            <div><strong>${esc(m.email)}${m.id === me ? " (deg)" : ""}</strong><span class="muted">${roleLabel(m.role)}</span></div>
+            <div class="row">
+              ${actBtn("owner", m, m.role === "owner" ? "Gjør til medlem" : "Gjør ansvarlig", "", `data-fid="${esc(f.id)}"`)}
+              ${families.length > 1 ? `<select data-move aria-label="Flytt til familie">${famOptions(f.id)}</select>${actBtn("move", m, "Flytt", "", `data-fid="${esc(f.id)}"`)}` : ""}
+              ${actBtn("remove", m, "Fjern", "btn-ghost", `data-fid="${esc(f.id)}"`)}
+            </div>
+          </li>`).join("")}</ul>` : `<p class="muted">Ingen medlemmer ennå. Inviter noen, eller legg til folk fra «Venter på plass».</p>`}
+      </section>`).join("") : `<section class="panel"><p class="muted">Ingen familier ennå. Opprett den første med skjemaet «Ny familie».</p></section>`}
+
+    <section class="panel">
+      <h2>📨 Ubrukte invitasjoner <span class="group-count">${invites.length}</span></h2>
+      ${invites.length ? `<ul class="admin-list">${invites.map((i) => adminItem(i.email, `${famName(i.family)} · ${i.role === "owner" ? "ansvarlig" : "medlem"} · ${i.expires < Date.now() ? "utløpt" : `til ${fmtDate(i.expires)}`}`,
+        `<a class="btn btn-sm" href="${esc(inviteMailto({ ...i, familyName: famName(i.family) }))}" aria-label="Send på nytt">📧</a>` + actBtn("share", i, "📤") + actBtn("delinv", i, "Slett", "btn-ghost"))).join("")}</ul>` : `<p class="muted">Ingen ubrukte invitasjoner.</p>`}
+    </section>`;
+}
+
+/* ================= Innstillinger ================= */
 function openSettings() {
-  renderSettings();
-  if (typeof settingsDialog.showModal === "function") settingsDialog.showModal();
-  else settingsDialog.setAttribute("open", "");
-}
-
-function renderSettings() {
-  const theme = storage.get("matplan:theme", "auto");
-  const user = getUser();
-
+  const theme = storage.get("shop:theme", "auto");
+  const a = state.access;
   settingsDialog.innerHTML = `
     <div class="sheet-body">
       <div class="sheet-head"><h2 id="settingsTitle">Innstillinger</h2><button class="btn btn-sm btn-ghost" type="button" data-close>Ferdig</button></div>
       <div class="setting">
-        <h3>Antall personer</h3>
-        <p>Brukes i handlelisten og som standard i oppskriftene.</p>
-        <div class="row"><div class="stepper" role="group" aria-label="Antall personer">
-          <button type="button" data-s="-1" aria-label="Færre">−</button><output id="sOut">${state.servings} pers.</output><button type="button" data-s="1" aria-label="Flere">+</button>
-        </div></div>
+        <h3>👤 Konto</h3>
+        <p>Logget inn som <strong>${esc(getUser()?.email || "")}</strong>${a.familyName ? ` · ${esc(a.familyName)} (${a.role === "owner" ? "ansvarlig" : "medlem"})` : ""}${a.admin ? " · administrator" : ""}.</p>
+        <div class="row"><button class="btn btn-sm" type="button" id="logoutBtn">Logg ut</button></div>
       </div>
       <div class="setting">
         <h3>Utseende</h3>
@@ -575,54 +518,33 @@ function renderSettings() {
       </div>
       <div class="setting">
         <h3>📱 Legg til på hjemskjermen</h3>
-        <p>På iPhone: trykk på Del-knappen i Safari og velg «Legg til på Hjem-skjerm». Da åpnes Matplan som en egen app.</p>
-      </div>
-      <div class="setting">
-        <h3>👤 Konto</h3>
-        <p>Logget inn som <strong>${esc(user?.email || "")}</strong>. Handlelisten deles med alle i familien som er logget inn.</p>
-        <div class="row">
-          ${state.access.admin ? `<a class="btn btn-sm btn-primary" href="#/admin" id="adminLink">👑 Administrer familien</a>` : ""}
-          <button class="btn btn-sm" type="button" id="logoutBtn">Logg ut</button>
-        </div>
+        <p>På iPhone: trykk på Del-knappen i Safari og velg «Legg til på Hjem-skjerm». Da åpnes Istrefi Shopping som en egen app.</p>
       </div>
     </div>`;
-
   const q = (s) => settingsDialog.querySelector(s);
   q("[data-close]").addEventListener("click", () => settingsDialog.close());
-  settingsDialog.querySelectorAll("[data-s]").forEach((b) => b.addEventListener("click", () => {
-    state.servings = Math.min(12, Math.max(1, state.servings + Number(b.dataset.s)));
-    storage.set("matplan:servings", state.servings);
-    q("#sOut").textContent = `${state.servings} pers.`;
-    updateBadge();
-    render();
-  }));
   settingsDialog.querySelectorAll("[data-theme-btn]").forEach((b) => b.addEventListener("click", () => {
-    storage.set("matplan:theme", b.dataset.themeBtn);
-    applyTheme(b.dataset.themeBtn);
-    renderSettings();
+    storage.set("shop:theme", b.dataset.themeBtn); applyTheme(b.dataset.themeBtn);
+    settingsDialog.querySelectorAll("[data-theme-btn]").forEach((x) => x.classList.toggle("active", x === b));
   }));
-  q("#adminLink")?.addEventListener("click", () => settingsDialog.close());
-  q("#logoutBtn").addEventListener("click", async () => {
-    if (!confirm("Vil du logge ut?")) return;
-    await signOut();
-    // onAuthStateChanged tar oss til innloggingssiden
-  });
+  q("#logoutBtn").addEventListener("click", async () => { if (confirm("Vil du logge ut?")) await signOut(); });
+  settingsDialog.showModal();
 }
-
 settingsDialog.addEventListener("click", (e) => { if (e.target === settingsDialog) settingsDialog.close(); });
 document.getElementById("settingsBtn").addEventListener("click", openSettings);
 
-/* ---------------- Innlogging, registrering og tilgang ---------------- */
-function authShell(inner, foot = "🔒 Kun for familien. Nye kontoer må godkjennes av administrator.") {
+/* ================= Innlogging, registrering og tilgang ================= */
+function authShell(inner, foot = "🔒 Kun for inviterte. Nye kontoer må godkjennes av administrator.") {
   document.body.classList.add("locked");
   if (settingsDialog.open) settingsDialog.close();
+  if (editDialog.open) editDialog.close();
   app.innerHTML = `
     <section class="login">
       <div class="login-card">
         <div class="login-logo" aria-hidden="true"><img src="icons/icon.svg" alt="" width="72" height="72"></div>
         ${inner}
       </div>
-      <p class="login-foot">${foot}</p>
+      ${foot ? `<p class="login-foot">${foot}</p>` : ""}
     </section>`;
 }
 
@@ -632,20 +554,20 @@ const passwordFields = (confirm) => `
   ${confirm ? `<label class="field"><span>Gjenta passord</span>
     <input id="password2" type="password" autocomplete="new-password" required minlength="6"></label>` : ""}
   <label class="check-row remember">
-    <input type="checkbox" id="remember" ${storage.get("matplan:remember", true) ? "checked" : ""}>
+    <input type="checkbox" id="remember" ${storage.get("shop:remember", true) ? "checked" : ""}>
     <span class="box" aria-hidden="true"></span>
     <span class="label">Husk meg på denne enheten</span>
   </label>`;
 
 function renderLogin(mode = "login", message = "") {
   const register = mode === "register";
-  document.title = register ? "Opprett konto – Matplan" : "Logg inn – Matplan";
+  document.title = register ? "Opprett konto – Istrefi Shopping" : "Logg inn – Istrefi Shopping";
   authShell(`
-    <h1>Matplan</h1>
-    <p class="login-sub">${register ? "Opprett en konto. Administrator må godkjenne den før du får tilgang." : "Familiens ukesmeny og handleliste"}</p>
+    <h1>Istrefi Shopping</h1>
+    <p class="login-sub">${register ? "Opprett en konto. Administrator plasserer deg i riktig familie." : "Familiens felles handleliste"}</p>
     <form id="authForm" novalidate>
       <label class="field"><span>E-post</span>
-        <input id="email" type="email" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false" required value="${esc(storage.get("matplan:lastEmail", ""))}"></label>
+        <input id="email" type="email" autocomplete="username" inputmode="email" autocapitalize="off" spellcheck="false" required value="${esc(storage.get("shop:lastEmail", ""))}"></label>
       ${passwordFields(register)}
       <p class="login-msg" id="loginMsg" role="alert">${esc(message)}</p>
       <button class="btn btn-primary btn-block" type="submit" id="submitBtn">${register ? "Opprett konto" : "Logg inn"}</button>
@@ -657,9 +579,7 @@ function renderLogin(mode = "login", message = "") {
   const msg = app.querySelector("#loginMsg");
   (email.value ? app.querySelector("#password") : email).focus();
   app.querySelector("#switchBtn").addEventListener("click", () => renderLogin(register ? "login" : "register"));
-
-  bindAuthForm(async (em, pw, rem) => (register ? signUp(em, pw, rem) : signIn(em, pw, rem)), register, register ? "Oppretter konto …" : "Logger inn …");
-
+  bindAuthForm((em, pw, rem) => (register ? signUp(em, pw, rem) : signIn(em, pw, rem)), register, register ? "Oppretter konto …" : "Logger inn …");
   app.querySelector("#forgotBtn")?.addEventListener("click", async () => {
     msg.classList.remove("ok");
     if (!email.value.trim()) { msg.textContent = "Skriv inn e-postadressen din først."; email.focus(); return; }
@@ -671,7 +591,6 @@ function renderLogin(mode = "login", message = "") {
   });
 }
 
-/** Felles innsending for innlogging/registrering. */
 function bindAuthForm(action, confirm, busyText) {
   const form = app.querySelector("#authForm");
   const email = app.querySelector("#email");
@@ -689,10 +608,9 @@ function bindAuthForm(action, confirm, busyText) {
     btn.disabled = true; btn.textContent = busyText;
     try {
       const remember = app.querySelector("#remember")?.checked ?? true;
-      storage.set("matplan:remember", remember);
+      storage.set("shop:remember", remember);
       await action(email.value, password.value, remember);
-      storage.set("matplan:lastEmail", email.value.trim());
-      // onAuthStateChanged tar over herfra
+      storage.set("shop:lastEmail", email.value.trim());
     } catch (err) {
       msg.textContent = errorText(err);
       btn.disabled = false; btn.textContent = label;
@@ -700,15 +618,13 @@ function bindAuthForm(action, confirm, busyText) {
   });
 }
 
-/** Side for den som har fått en invitasjonslenke. */
 async function renderInvite(token, mode = "register") {
-  authShell(`<div class="spinner" aria-hidden="true"></div><p class="login-sub">Henter invitasjonen …</p>`);
+  authShell(`<div class="spinner" aria-hidden="true"></div><p class="login-sub">Henter invitasjonen …</p>`, "");
   let invite = null;
-  try { invite = await getInvite(token); } catch { /* ingen tilgang / nett */ }
+  try { invite = await getInvite(token); } catch { /* ugyldig / uten nett */ }
 
   if (!invite || invite.usedBy || invite.expires < Date.now()) {
-    state.pendingInvite = null;
-    storage.set("matplan:invite", null);
+    state.pendingInvite = null; storage.set("shop:invite", null);
     authShell(`
       <h1>Invitasjonen gjelder ikke</h1>
       <p class="login-sub">${!invite ? "Lenken er ugyldig eller slettet." : invite.usedBy ? "Invitasjonen er allerede brukt." : "Invitasjonen har gått ut på dato."} Be om en ny invitasjon, eller logg inn hvis du allerede har konto.</p>
@@ -718,10 +634,10 @@ async function renderInvite(token, mode = "register") {
   }
 
   const register = mode === "register";
-  document.title = "Invitasjon – Matplan";
+  document.title = "Invitasjon – Istrefi Shopping";
   authShell(`
     <h1>Du er invitert! 🎉</h1>
-    <p class="login-sub">${register ? "Lag et passord for å bli med i familiens Matplan." : "Logg inn for å godta invitasjonen."}</p>
+    <p class="login-sub">${invite.familyName ? `Bli med i handlelisten til <strong>${esc(invite.familyName)}</strong>. ` : ""}${register ? "Lag et passord for å komme i gang." : "Logg inn for å godta invitasjonen."}</p>
     <form id="authForm" novalidate>
       <label class="field"><span>E-post</span>
         <input id="email" type="email" autocomplete="username" value="${esc(invite.email)}" readonly></label>
@@ -730,56 +646,59 @@ async function renderInvite(token, mode = "register") {
       <button class="btn btn-primary btn-block" type="submit" id="submitBtn">${register ? "Opprett konto" : "Logg inn"}</button>
     </form>
     <p class="login-switch">${register ? `Har du allerede konto? <button type="button" class="link-btn" id="switchBtn">Logg inn</button>` : `Ny bruker? <button type="button" class="link-btn" id="switchBtn">Opprett konto</button>`}</p>`,
-    "🔒 Invitasjonen gjelder bare for denne e-postadressen.");
+  "🔒 Invitasjonen gjelder bare for denne e-postadressen.");
   app.querySelector("#password").focus();
   app.querySelector("#switchBtn").addEventListener("click", () => renderInvite(token, register ? "login" : "register"));
   bindAuthForm(async (em, pw, rem) => {
-    try {
-      await (register ? signUp(em, pw, rem) : signIn(em, pw, rem));
-    } catch (err) {
-      if (err?.code === "auth/email-already-in-use") { renderInvite(token, "login"); }
-      throw err;
-    }
+    try { await (register ? signUp(em, pw, rem) : signIn(em, pw, rem)); }
+    catch (err) { if (err?.code === "auth/email-already-in-use") renderInvite(token, "login"); throw err; }
   }, register, register ? "Oppretter konto …" : "Logger inn …");
 }
 
 function renderPending(user) {
-  document.title = "Venter på godkjenning – Matplan";
+  document.title = "Venter på godkjenning – Istrefi Shopping";
   authShell(`
     <h1>Venter på godkjenning</h1>
-    <p class="login-sub">Kontoen <strong>${esc(user.email)}</strong> er opprettet. Administrator må godkjenne den før du får se matplanen.</p>
+    <p class="login-sub">Kontoen <strong>${esc(user.email)}</strong> er opprettet. Administrator må legge deg til i en familie før du ser handlelisten.</p>
     <p class="login-msg" id="loginMsg" role="alert"></p>
     <button class="btn btn-primary btn-block" type="button" id="recheckBtn">Sjekk igjen</button>
     <button class="btn btn-ghost btn-sm" type="button" id="logoutBtn2">Logg ut</button>
-    <button class="link-btn small" type="button" id="adminBtn">Er du administrator?</button>`);
+    <button class="link-btn small" type="button" id="adminBtn">Er du administrator?</button>`, "");
   app.querySelector("#recheckBtn").addEventListener("click", () => onAuthChange(user));
   app.querySelector("#logoutBtn2").addEventListener("click", () => signOut());
   app.querySelector("#adminBtn").addEventListener("click", async () => {
-    const msg = app.querySelector("#loginMsg");
     try { await becomeAdmin(user); onAuthChange(user); }
-    catch { msg.textContent = "Denne kontoen kan ikke bli administrator."; }
+    catch { app.querySelector("#loginMsg").textContent = "Denne kontoen kan ikke bli administrator."; }
   });
 }
 
-async function startApp() {
-  document.body.classList.remove("locked");
-  if (!state.weeks.length) {
-    const index = await fetchJSON("data/weeks.json");
-    state.weeks = index.weeks;
-  }
-  const route = currentRoute();
-  const id = route.weekId || pickDefaultWeek(state.weeks);
-  state.week = null; // ny tilkobling for innlogget bruker
-  await selectWeek(id);
-  await render();
+/** Hent tilgang på nytt (f.eks. etter at admin har endret egen familie) og koble til riktig liste. */
+async function refreshAccess() {
+  state.access = await getAccess(getUser());
+  connectList();
+  applyChrome();
+}
+
+function connectList() {
+  const fid = state.access.family;
+  if (state.list?.fid === fid) return;
+  state.list?.disconnect();
+  state.list = fid ? new FamilyList(fid) : null;
+  state.list?.onChange(() => { updateBadge(); if (currentRoute() === "list") renderListBody(); });
+  updateBadge();
+}
+
+function applyChrome() {
+  document.querySelectorAll("[data-admin-only]").forEach((el) => { el.hidden = !state.access.admin; });
+  document.getElementById("brandFamily").textContent = state.access.familyName || "";
 }
 
 let authSeq = 0;
 async function onAuthChange(user) {
   const seq = ++authSeq;
   if (!user) {
-    state.store?.disconnect();
-    state.store = null; state.week = null; state.access = { admin: false, member: false };
+    state.list?.disconnect(); state.list = null;
+    state.access = { admin: false, family: null, role: null, familyName: null };
     updateBadge();
     if (state.pendingInvite) renderInvite(state.pendingInvite); else renderLogin();
     return;
@@ -788,16 +707,23 @@ async function onAuthChange(user) {
   try {
     if (state.pendingInvite) {
       const token = state.pendingInvite;
-      state.pendingInvite = null;
-      storage.set("matplan:invite", null);
-      try { await claimInvite(token, user); toast("Velkommen til Matplan! 🎉"); }
-      catch (err) { console.warn("Kunne ikke bruke invitasjonen", err); toast("Invitasjonen gjelder ikke for denne kontoen"); }
+      state.pendingInvite = null; storage.set("shop:invite", null);
+      try {
+        const invite = await getInvite(token);
+        if (!invite) throw new Error("ugyldig");
+        await claimInvite(token, invite, user);
+        toast(`Velkommen til ${invite.familyName || "handlelisten"}! 🎉`);
+      } catch (err) { console.warn("Kunne ikke bruke invitasjonen", err); toast("Invitasjonen gjelder ikke for denne kontoen"); }
     }
     const access = await getAccess(user);
     if (seq !== authSeq) return;
     state.access = access;
-    if (access.admin || access.member) await startApp();
-    else {
+    if (access.admin || access.family) {
+      document.body.classList.remove("locked");
+      connectList();
+      applyChrome();
+      render();
+    } else {
       requestAccess(user).catch(() => {});
       renderPending(user);
     }
@@ -806,138 +732,30 @@ async function onAuthChange(user) {
 
 function showLoadError(err) {
   console.error(err);
-  app.innerHTML = `<section class="page"><div class="empty"><div class="big">📡</div><p>Kunne ikke hente matplanen. Sjekk nettet og prøv igjen.</p><p style="margin-top:12px"><button class="btn" onclick="location.reload()">Prøv igjen</button></p></div></section>`;
+  app.innerHTML = `<section class="page"><div class="empty"><div class="big">📡</div><p>Kunne ikke laste. Sjekk nettet og prøv igjen.</p><p style="margin-top:12px"><button class="btn" onclick="location.reload()">Prøv igjen</button></p></div></section>`;
 }
 
-/* ---------------- Administrator ---------------- */
-const fmtDate = (ms) => new Date(ms).toLocaleDateString("nb-NO", { day: "numeric", month: "short" });
-
-function inviteMailto(invite) {
-  const link = inviteLink(invite.token || invite.id);
-  const subject = "Invitasjon til Matplan";
-  const body = `Hei!\n\nDu er invitert til familiens Matplan – ukesmeny med oppskrifter og felles handleliste.\n\nTrykk på lenken for å lage konto:\n${link}\n\nLenken gjelder i 14 dager.\n`;
-  return `mailto:${encodeURIComponent(invite.email)}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-}
-
-async function shareInvite(invite) {
-  const url = inviteLink(invite.token || invite.id);
-  if (navigator.share) {
-    try { await navigator.share({ title: "Invitasjon til Matplan", text: "Du er invitert til familiens Matplan:", url }); } catch { /* avbrutt */ }
-  } else {
-    try { await navigator.clipboard.writeText(url); toast("Lenke kopiert"); } catch { prompt("Kopier lenken:", url); }
-  }
-}
-
-async function renderAdmin() {
-  document.title = "Administrer – Matplan";
-  app.innerHTML = `
-    <section class="page">
-      <div class="page-head"><div>
-        <div class="eyebrow">Kun for administrator</div>
-        <h1 class="page-title">Familien</h1>
-        <p class="lead">Inviter nye, godkjenn forespørsler og styr hvem som har tilgang.</p>
-      </div></div>
-      <div class="admin-grid">
-        <section class="panel">
-          <h2>✉️ Inviter noen</h2>
-          <p class="muted">De får en lenke for å lage konto og kommer rett inn.</p>
-          <form class="add-form" id="inviteForm" autocomplete="off">
-            <label class="visually-hidden" for="inviteEmail">E-post</label>
-            <input id="inviteEmail" type="email" inputmode="email" autocapitalize="off" placeholder="navn@eksempel.no" required>
-            <button class="btn btn-primary" type="submit">Lag</button>
-          </form>
-          <div id="newInvite"></div>
-        </section>
-        <div id="adminLists"><div class="loading"><div class="spinner"></div></div></div>
-      </div>
-    </section>`;
-
-  app.querySelector("#inviteForm").addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const input = app.querySelector("#inviteEmail");
-    const email = input.value.trim();
-    if (!/^\S+@\S+\.\S+$/.test(email)) { toast("Skriv inn en gyldig e-postadresse"); return; }
-    try {
-      const inv = await createInvite(email, getUser());
-      input.value = "";
-      app.querySelector("#newInvite").innerHTML = `
-        <div class="invite-ready">
-          <p><strong>Invitasjon klar for ${esc(inv.email)}</strong></p>
-          <div class="row">
-            <a class="btn btn-primary btn-sm" href="${esc(inviteMailto(inv))}">📧 Send på e-post</a>
-            <button class="btn btn-sm" type="button" id="shareNew">📤 Del lenke</button>
-          </div>
-        </div>`;
-      app.querySelector("#shareNew").addEventListener("click", () => shareInvite(inv));
-      loadAdminLists();
-    } catch (err) { toast(errorText(err)); }
-  });
-
-  app.querySelector("#adminLists").addEventListener("click", async (e) => {
-    const b = e.target.closest("button[data-act]"); if (!b) return;
-    const { act, id, email } = b.dataset;
-    try {
-      if (act === "approve") { await approveRequest(id, email); toast(`${email} er godkjent`); }
-      if (act === "deny" && confirm(`Avslå ${email}?`)) await denyRequest(id);
-      if (act === "delinv" && confirm(`Slette invitasjonen til ${email}?`)) await deleteInvite(id);
-      if (act === "share") await shareInvite({ id, email });
-      if (act === "remove" && confirm(`Fjerne tilgangen til ${email}?`)) { await removeMember(id); toast(`${email} er fjernet`); }
-      loadAdminLists();
-    } catch (err) { toast(errorText(err)); }
-  });
-
-  loadAdminLists();
-}
-
-async function loadAdminLists() {
-  const box = app.querySelector("#adminLists");
-  if (!box) return;
-  let data;
-  try { data = await loadAdminData(); } catch (err) { box.innerHTML = `<p class="muted">${esc(errorText(err))}</p>`; return; }
-  const me = getUser()?.uid;
-  const now = Date.now();
-  const item = (title, sub, actions) => `<li class="admin-item"><div><strong>${esc(title)}</strong><span class="muted">${esc(sub)}</span></div><div class="row">${actions}</div></li>`;
-  const btn = (act, d, label, cls = "btn-sm") => `<button class="btn ${cls}" type="button" data-act="${act}" data-id="${esc(d.id)}" data-email="${esc(d.email || "")}">${label}</button>`;
-
-  box.innerHTML = `
-    ${data.requests.length ? `<section class="panel">
-      <h2>🙋 Venter på godkjenning <span class="group-count">${data.requests.length}</span></h2>
-      <ul class="admin-list">${data.requests.map((r) => item(r.email, `Registrert ${fmtDate(r.at)}`, btn("approve", r, "Godkjenn", "btn-sm btn-primary") + btn("deny", r, "Avslå", "btn-sm btn-ghost"))).join("")}</ul>
-    </section>` : ""}
-    <section class="panel">
-      <h2>👨‍👩‍👧 Medlemmer <span class="group-count">${data.members.length + (state.access.admin && !data.members.some((m) => m.id === me) ? 1 : 0)}</span></h2>
-      <ul class="admin-list">
-        ${data.members.some((m) => m.id === me) ? "" : item(getUser()?.email || "", "Administrator (deg)", "")}
-        ${data.members.map((m) => item(m.email, m.id === me ? "Deg" : `Medlem siden ${fmtDate(m.joined)}`, m.id === me ? "" : btn("remove", m, "Fjern", "btn-sm btn-ghost"))).join("")}
-      </ul>
-    </section>
-    <section class="panel">
-      <h2>📨 Sendte invitasjoner <span class="group-count">${data.invites.length}</span></h2>
-      ${data.invites.length ? `<ul class="admin-list">${data.invites.map((i) => item(i.email, i.expires < now ? "Utløpt" : `Gjelder til ${fmtDate(i.expires)}`,
-        `<a class="btn btn-sm" href="${esc(inviteMailto(i))}">📧</a>` + btn("share", i, "📤") + btn("delinv", i, "Slett", "btn-sm btn-ghost"))).join("")}</ul>` : `<p class="muted">Ingen ubrukte invitasjoner.</p>`}
-    </section>`;
-}
-
-/* ---------------- Diverse ---------------- */
+/* ================= Diverse ================= */
 let toastTimer;
-function toast(msg) {
-  toastEl.textContent = msg;
+function toast(msg, action = null) {
+  toastEl.innerHTML = `<span>${esc(msg)}</span>${action ? `<button type="button" class="toast-action">${esc(action.label)}</button>` : ""}`;
+  if (action) toastEl.querySelector(".toast-action").addEventListener("click", () => { action.fn(); toastEl.classList.remove("show"); });
   toastEl.classList.add("show");
+  toastEl.style.pointerEvents = action ? "auto" : "none";
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => toastEl.classList.remove("show"), 2600);
+  toastTimer = setTimeout(() => toastEl.classList.remove("show"), action ? 5000 : 2600);
 }
 
 const topbar = document.querySelector(".topbar");
 window.addEventListener("scroll", () => topbar.classList.toggle("scrolled", window.scrollY > 4), { passive: true });
 
-/* ---------------- Oppstart ---------------- */
+/* ================= Oppstart ================= */
 async function init() {
-  // Invitasjonslenke: ?invitasjon=TOKEN
   const params = new URLSearchParams(location.search);
   const token = params.get("invitasjon");
-  if (token && /^[a-z0-9]{10,64}$/.test(token)) storage.set("matplan:invite", token);
+  if (token && /^[a-z0-9]{10,64}$/.test(token)) storage.set("shop:invite", token);
   if (params.has("invitasjon")) history.replaceState(null, "", location.pathname + location.hash);
-  state.pendingInvite = storage.get("matplan:invite", null);
+  state.pendingInvite = storage.get("shop:invite", null);
 
   if ("serviceWorker" in navigator && location.protocol === "https:") {
     navigator.serviceWorker.register("sw.js").catch(() => {});
@@ -945,9 +763,7 @@ async function init() {
   try {
     const user = await initAuth(onAuthChange);
     onAuthChange(user);
-  } catch (err) {
-    showLoadError(err);
-  }
+  } catch (err) { showLoadError(err); }
 }
 
 init();

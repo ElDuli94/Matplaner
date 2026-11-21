@@ -1,19 +1,18 @@
 // Service worker: gjør siden rask og lar den fungere uten nett (f.eks. i butikken).
-const VERSION = "v8";
-const CACHE = `matplan-${VERSION}`;
+const VERSION = "v9";
+const CACHE = `shop-${VERSION}`;
 const CORE = [
   "./",
   "index.html",
-  "css/style.css?v=7",
-  "js/app.js?v=7",
+  "css/style.css?v=8",
+  "js/app.js?v=8",
   "js/util.js",
-  "js/shopping.js",
-  "js/store.js",
-  "js/firebase.js",
-  "js/auth.js",
+  "js/categories.js",
+  "js/list.js",
   "js/access.js",
+  "js/auth.js",
+  "js/firebase.js",
   "js/firebase-config.js",
-  "data/weeks.json",
   "manifest.webmanifest",
   "icons/icon.svg",
 ];
@@ -25,7 +24,7 @@ self.addEventListener("install", (e) => {
 self.addEventListener("activate", (e) => {
   e.waitUntil(
     caches.keys()
-      .then((keys) => Promise.all(keys.filter((k) => k.startsWith("matplan-") && k !== CACHE).map((k) => caches.delete(k))))
+      .then((keys) => Promise.all(keys.filter((k) => (k.startsWith("shop-") || k.startsWith("matplan-")) && k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
