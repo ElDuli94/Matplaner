@@ -756,7 +756,7 @@ function showLoadError(err) {
 }
 
 /* ================= Lasteskjerm ================= */
-const SPLASH_MIN_MS = 1900; // lang nok til at animasjonen rekker å vises
+const SPLASH_MIN_MS = 2900; // lang nok til at animasjonen rekker å vises
 function hideSplash() {
   const el = document.getElementById("splash");
   if (!el || el.dataset.done) return;
