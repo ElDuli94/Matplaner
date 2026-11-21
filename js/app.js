@@ -1,12 +1,12 @@
-import { esc, storage, fmtDate } from "./util.js";
-import { CATEGORIES, CAT_BY_ID } from "./categories.js";
-import { FamilyList } from "./list.js";
-import { initAuth, getUser, signIn, signUp, signOut, resetPassword, errorText } from "./auth.js";
+import { esc, storage, fmtDate } from "./util.js?v=13";
+import { CATEGORIES, CAT_BY_ID } from "./categories.js?v=13";
+import { FamilyList } from "./list.js?v=13";
+import { initAuth, getUser, signIn, signUp, signOut, resetPassword, errorText } from "./auth.js?v=13";
 import {
   getAccess, getInvite, createInvite, inviteLink, claimInvite, deleteInvite, familyInvites, requestAccess,
   becomeAdmin, loadAdminData, createFamily, renameFamily, deleteFamily, placeUser, setRole, removeMember,
   denyRequest, familyMembers,
-} from "./access.js";
+} from "./access.js?v=13";
 
 const app = document.getElementById("app");
 const settingsDialog = document.getElementById("settings");
@@ -122,6 +122,7 @@ function renderList() {
     if (e.target.closest("#clearAllBtn")) {
       const all = Object.entries(state.list.items).filter(([, it]) => it && it.name).map(([id, it]) => [id, { ...it }]);
       if (!all.length || !confirm(`Tømme hele handlelisten (${all.length} ${all.length === 1 ? "vare" : "varer"})? Dette gjelder for hele familien.`)) return;
+      if (typeof state.list.clearAll !== "function") { toast("Oppdaterer appen …"); setTimeout(() => location.reload(), 800); return; }
       state.list.clearAll();
       toast("Handlelisten er tømt", { label: "Angre", fn: () => state.list.restore(all) });
     }

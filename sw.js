@@ -1,11 +1,11 @@
 // Service worker: gjør siden rask og lar den fungere uten nett (f.eks. i butikken).
-const VERSION = "v13";
+const VERSION = "v14";
 const CACHE = `shop-${VERSION}`;
 const CORE = [
   "./",
   "index.html",
   "css/style.css?v=10",
-  "js/app.js?v=12",
+  "js/app.js?v=13",
   "js/util.js",
   "js/categories.js",
   "js/list.js",
@@ -37,7 +37,7 @@ self.addEventListener("fetch", (e) => {
   if (url.origin !== location.origin) return; // Firebase o.l. håndteres av nettleseren
 
   e.respondWith(
-    fetch(req)
+    fetch(req, { cache: "no-cache" }) // spør alltid serveren om nyeste versjon (rask 304 hvis uendret)
       .then((res) => {
         if (res.ok) {
           const copy = res.clone();
